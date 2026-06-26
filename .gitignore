@@ -1,0 +1,8 @@
+bin/
+config.yaml
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib

@@ -1,0 +1,11 @@
+repos:
+  - path: /path/to/service-a
+  - path: /path/to/service-b
+
+exclude_patterns:
+  - "vendor/**"
+  - "**/*_test.go"
+  - "testdata/**"
+
+transport: stdio
+port: 7400
