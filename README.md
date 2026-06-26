@@ -72,10 +72,14 @@ For quick one-off use, skip the YAML file and pass repositories directly:
 GOAST_REPOS=/path/repo-a,/path/repo-b goast
 ```
 
-Register it with Claude Code:
+Register it with Codex or Claude Code as a stdio MCP server:
 
 ```bash
-claude mcp add --transport stdio --scope user goast \
+codex mcp add goast \
+  --env GOAST_CONFIG=/path/to/config.yaml \
+  -- goast
+
+claude mcp add goast --scope user --transport stdio \
   --env GOAST_CONFIG=/path/to/config.yaml \
   -- goast
 ```
@@ -265,15 +269,82 @@ When no exclude patterns are provided, `goast` skips `vendor/**`,
 
 ## MCP Client Setup
 
-Claude Code:
+`goast` is normally run by the client as a stdio subprocess. Install it first:
 
 ```bash
-claude mcp add --transport stdio --scope user goast \
+go install github.com/helsingin/goast/cmd/goast@latest
+```
+
+If `goast` is not on your shell `PATH`, use the absolute path to the installed
+binary in the client config. With the default Go layout, that is usually:
+
+```bash
+$(go env GOPATH)/bin/goast
+```
+
+### Codex
+
+Register `goast` as a Codex stdio MCP server:
+
+```bash
+codex mcp add goast \
   --env GOAST_CONFIG=/path/to/config.yaml \
   -- goast
 ```
 
-Claude Desktop:
+Use an absolute binary path if needed:
+
+```bash
+codex mcp add goast \
+  --env GOAST_CONFIG=/path/to/config.yaml \
+  -- "$(go env GOPATH)/bin/goast"
+```
+
+Check the registered server:
+
+```bash
+codex mcp get goast
+```
+
+Remove an older registration before adding a replacement:
+
+```bash
+codex mcp remove goast
+```
+
+### Claude Code
+
+Register `goast` as a user-scoped Claude Code stdio MCP server:
+
+```bash
+claude mcp add goast --scope user --transport stdio \
+  --env GOAST_CONFIG=/path/to/config.yaml \
+  -- goast
+```
+
+Use an absolute binary path if needed:
+
+```bash
+claude mcp add goast --scope user --transport stdio \
+  --env GOAST_CONFIG=/path/to/config.yaml \
+  -- "$(go env GOPATH)/bin/goast"
+```
+
+Check the registered server:
+
+```bash
+claude mcp get goast
+```
+
+Remove an older registration before adding a replacement:
+
+```bash
+claude mcp remove goast --scope user
+```
+
+### Claude Desktop
+
+Add the server to the Claude Desktop config:
 
 ```json
 {
