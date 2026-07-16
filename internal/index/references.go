@@ -3,6 +3,7 @@ package index
 import (
 	"go/ast"
 	"go/token"
+	"sort"
 	"strings"
 )
 
@@ -13,6 +14,7 @@ type Reference struct {
 	FromSymbol int    // index into Index.Symbols — the containing function/method
 	FilePath   string // file where the reference occurs
 	Line       int    // 1-based line number
+	Column     int    // 1-based column; preserves distinct same-line references
 }
 
 // rawReference is an unresolved reference collected during parsing. It is
@@ -21,9 +23,11 @@ type rawReference struct {
 	fromImportPath string
 	fromName       string // "Foo" for funcs, "Recv.Method" for methods
 	targetPath     string // "" means same-package as caller
+	targetReceiver string // non-empty for a receiver-resolved method reference
 	targetName     string
 	filePath       string
 	line           int
+	column         int
 }
 
 // goBuiltins are predeclared identifiers we exclude from reference collection
@@ -48,9 +52,8 @@ var goBuiltins = map[string]bool{
 //   - qualified calls and value refs whose qualifier matches a file-level
 //     import alias (`pkg.Foo`, `pkg.Foo()`)
 //
-// Method calls on values (`x.Method()`) and same-package non-call ident uses
-// are intentionally skipped — without type resolution they're too noisy to be
-// useful.
+// Receiver selections are collected separately by collectTypedMethodReferences;
+// this syntax-only pass deliberately leaves them alone rather than guessing.
 func collectReferences(fset *token.FileSet, file *ast.File, importPath string, aliasMap map[string]string) []rawReference {
 	var refs []rawReference
 
@@ -80,6 +83,7 @@ func collectReferences(fset *token.FileSet, file *ast.File, importPath string, a
 							targetName:     id.Name,
 							filePath:       file.Name.Name, // placeholder; replaced below
 							line:           fset.Position(id.Pos()).Line,
+							column:         fset.Position(id.Pos()).Column,
 						})
 					}
 				}
@@ -99,6 +103,7 @@ func collectReferences(fset *token.FileSet, file *ast.File, importPath string, a
 					targetName:     x.Sel.Name,
 					filePath:       file.Name.Name, // placeholder; replaced below
 					line:           fset.Position(x.Sel.Pos()).Line,
+					column:         fset.Position(x.Sel.Pos()).Column,
 				})
 			}
 			return true
@@ -131,35 +136,111 @@ func (idx *Index) buildReferences(raw []rawReference) {
 			targetPath = r.fromImportPath
 		}
 
-		// Look up the target symbol by (pkg, name). Skip if it isn't in the index.
-		targetIndices, ok := idx.byPkg[targetPath]
-		if !ok {
-			continue
+		targetName := r.targetName
+		if r.targetReceiver != "" {
+			targetName = r.targetReceiver + "." + targetName
 		}
-		hasTarget := false
-		for _, ti := range targetIndices {
-			if idx.Symbols[ti].Name == r.targetName {
-				hasTarget = true
-				break
-			}
-		}
-		if !hasTarget {
+
+		// Look up the exact target. A method requires Receiver.Method; an
+		// unqualified name deliberately cannot resolve to a same-named method.
+		if !idx.hasReferenceTarget(targetPath, targetName) {
 			continue
 		}
 
 		// Resolve the caller symbol index.
-		fromIdx := idx.lookupSymbolIndex(r.fromImportPath, r.fromName)
+		fromIdx := idx.lookupReferenceCaller(r.fromImportPath, r.fromName, r.filePath, r.line)
 		if fromIdx < 0 {
 			continue
 		}
 
-		key := targetPath + "\x00" + r.targetName
+		key := targetPath + "\x00" + targetName
 		idx.References[key] = append(idx.References[key], Reference{
 			FromSymbol: fromIdx,
 			FilePath:   r.filePath,
 			Line:       r.line,
+			Column:     r.column,
 		})
 	}
+
+	// The type-checker traverses package groups in import order while the
+	// syntax collector follows files. Normalize both into stable, duplicate-free
+	// reference lists so reindexing produces byte-for-byte deterministic output.
+	for key, refs := range idx.References {
+		sort.Slice(refs, func(i, j int) bool {
+			if refs[i].FilePath != refs[j].FilePath {
+				return refs[i].FilePath < refs[j].FilePath
+			}
+			if refs[i].Line != refs[j].Line {
+				return refs[i].Line < refs[j].Line
+			}
+			if refs[i].Column != refs[j].Column {
+				return refs[i].Column < refs[j].Column
+			}
+			return refs[i].FromSymbol < refs[j].FromSymbol
+		})
+		out := refs[:0]
+		for _, ref := range refs {
+			if len(out) > 0 {
+				last := out[len(out)-1]
+				if ref.FromSymbol == last.FromSymbol && ref.FilePath == last.FilePath && ref.Line == last.Line && ref.Column == last.Column {
+					continue
+				}
+			}
+			out = append(out, ref)
+		}
+		idx.References[key] = out
+	}
+}
+
+func (idx *Index) lookupReferenceCaller(importPath, name, filePath string, line int) int {
+	indices, ok := idx.byPkg[importPath]
+	if !ok {
+		return -1
+	}
+	receiver, symbolName := "", name
+	if parts := strings.SplitN(name, ".", 2); len(parts) == 2 {
+		receiver, symbolName = parts[0], parts[1]
+	}
+	fallback := -1
+	for _, symbolIndex := range indices {
+		symbol := idx.Symbols[symbolIndex]
+		if symbol.Name != symbolName || symbol.Receiver != receiver {
+			continue
+		}
+		if (receiver == "" && symbol.Kind != SymbolFunc) || (receiver != "" && symbol.Kind != SymbolMethod) {
+			continue
+		}
+		if fallback < 0 {
+			fallback = symbolIndex
+		}
+		if symbol.FilePath == filePath && line >= symbol.Line && line <= symbol.EndLine {
+			return symbolIndex
+		}
+	}
+	return fallback
+}
+
+func (idx *Index) hasReferenceTarget(importPath, name string) bool {
+	if idx.lookupSymbolIndex(importPath, name) >= 0 {
+		return true
+	}
+	parts := strings.SplitN(name, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	receiver, method := parts[0], parts[1]
+	for _, symbolIndex := range idx.byPkg[importPath] {
+		symbol := idx.Symbols[symbolIndex]
+		if symbol.Kind != SymbolType || symbol.TypeKind != TypeInterface || symbol.Name != receiver {
+			continue
+		}
+		for _, descriptor := range symbol.MethodDescriptors {
+			if strings.HasPrefix(descriptor, method+"(") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // lookupSymbolIndex returns the Symbols index of the named symbol in the
@@ -180,7 +261,7 @@ func (idx *Index) lookupSymbolIndex(importPath, name string) int {
 			if s.Name == methodName && s.Receiver == receiver {
 				return i
 			}
-		} else if s.Name == name {
+		} else if s.Name == name && s.Kind != SymbolMethod {
 			return i
 		}
 	}

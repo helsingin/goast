@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"log"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,13 +17,26 @@ import (
 
 // RepoConfig describes a repository to index.
 type RepoConfig struct {
-	Path string
+	Path                  string
+	IncludeTests          bool
+	TypedMethodReferences bool
+}
+
+// BuildContext selects a coherent build-tag variant for go/types analysis.
+// Empty GOOS/GOARCH values inherit the running Go toolchain defaults.
+type BuildContext struct {
+	GOOS       string
+	GOARCH     string
+	CGOEnabled *bool
+	BuildTags  []string
+	ToolTags   []string
 }
 
 // IndexConfig holds configuration for building an index.
 type IndexConfig struct {
 	Repos           []RepoConfig
 	ExcludePatterns []string
+	BuildContexts   []BuildContext
 }
 
 // BuildIndex walks all configured repos, parses Go files, and builds an in-memory index.
@@ -30,6 +44,14 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 	var allSymbols []Symbol
 	var allPackages []Package
 	var allRawRefs []rawReference
+	typeSources := make(map[string]*typeSourcePackage)
+	typedReferencesEnabled := false
+	for _, repo := range cfg.Repos {
+		if repo.TypedMethodReferences {
+			typedReferencesEnabled = true
+			break
+		}
+	}
 
 	// Track packages by import path to aggregate across files.
 	type pkgInfo struct {
@@ -96,7 +118,8 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 			if !strings.HasSuffix(info.Name(), ".go") {
 				return nil
 			}
-			if strings.HasSuffix(info.Name(), "_test.go") {
+			isTestFile := strings.HasSuffix(info.Name(), "_test.go")
+			if isTestFile && !rc.IncludeTests {
 				return nil
 			}
 			if shouldExclude(path, repoRoot, cfg.ExcludePatterns) {
@@ -104,14 +127,24 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 			}
 
 			generated := strings.HasSuffix(info.Name(), ".pb.go")
-			importPath := DeriveImportPath(modulePath, repoRoot, path)
+			baseImportPath := DeriveImportPath(modulePath, repoRoot, path)
+			symbols, pkgDoc, fileImports, fileRefs, importPath, pkgName, parsed, err := parseFile(
+				fset, path, repoName, baseImportPath, generated, isTestFile,
+			)
+			if err != nil {
+				log.Printf("WARNING: parse error in %s: %v", path, err)
+				return nil
+			}
+
 			internal := strings.Contains(importPath, "/internal/") || strings.HasSuffix(importPath, "/internal")
 
-			// Track package info.
+			// Track package info after parsing: an external test package uses an
+			// impossible-as-a-Go-import synthetic path so its symbols and callers
+			// cannot collide with either package foo or a real foo_test import.
 			if _, ok := pkgMap[importPath]; !ok {
 				pkgMap[importPath] = &pkgInfo{
 					importPath: importPath,
-					name:       "", // filled from AST
+					name:       pkgName,
 					repo:       repoName,
 					dir:        filepath.Dir(path),
 					internal:   internal,
@@ -119,14 +152,11 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 			}
 			pkgMap[importPath].fileCount++
 
-			symbols, pkgDoc, fileImports, fileRefs, err := parseFile(fset, path, repoName, importPath, generated)
-			if err != nil {
-				log.Printf("WARNING: parse error in %s: %v", path, err)
-				return nil
-			}
-
 			allSymbols = append(allSymbols, symbols...)
 			allRawRefs = append(allRawRefs, fileRefs...)
+			if typedReferencesEnabled {
+				addTypeSourceFile(typeSources, baseImportPath, importPath, fset, parsed, path, isTestFile, rc.TypedMethodReferences)
+			}
 
 			// Collect imports for dependency detection.
 			for _, imp := range fileImports {
@@ -134,9 +164,6 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 			}
 
 			pi := pkgMap[importPath]
-			if pi.name == "" && len(symbols) > 0 {
-				pi.name = symbols[0].PkgName
-			}
 			if pi.doc == "" && pkgDoc != "" {
 				pi.doc = pkgDoc
 			}
@@ -146,6 +173,18 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 		if err != nil {
 			return nil, fmt.Errorf("walking repo %s: %w", repoName, err)
 		}
+	}
+
+	// Resolve method selections after every configured package has been parsed.
+	// The checker imports indexed packages from these in-memory ASTs, which makes
+	// receiver resolution work across repositories without requiring builds,
+	// installed export data, or mutations to the source workspaces.
+	if typedReferencesEnabled {
+		typedRefs, err := collectTypedMethodReferencesForContexts(typeSources, cfg.BuildContexts)
+		if err != nil {
+			return nil, fmt.Errorf("typed method references: %w", err)
+		}
+		allRawRefs = append(allRawRefs, typedRefs...)
 	}
 
 	// Build cross-repo dependency map.
@@ -199,37 +238,78 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 	return idx, nil
 }
 
-func shouldExclude(path, repoRoot string, patterns []string) bool {
-	rel, err := filepath.Rel(repoRoot, path)
+func shouldExclude(filePath, repoRoot string, patterns []string) bool {
+	rel, err := filepath.Rel(repoRoot, filePath)
 	if err != nil {
 		return false
 	}
+	rel = filepath.ToSlash(rel)
 	for _, pat := range patterns {
-		matched, _ := filepath.Match(pat, rel)
-		if matched {
+		pat = filepath.ToSlash(pat)
+		if matchPathGlob(pat, rel) {
 			return true
 		}
-		// Also try matching just the filename.
-		matched, _ = filepath.Match(pat, filepath.Base(rel))
-		if matched {
+		// A pattern with no directory component applies to every basename.
+		if !strings.Contains(pat, "/") && matchPathGlob(pat, pathpkg.Base(rel)) {
 			return true
 		}
 	}
 	return false
 }
 
-func parseFile(fset *token.FileSet, path, repoName, importPath string, generated bool) ([]Symbol, string, []string, []rawReference, error) {
+// matchPathGlob matches slash-separated paths with filepath-style segment
+// patterns plus the conventional ** segment for zero or more directories.
+// filepath.Match does not implement globstar, even though GoAST's documented
+// defaults and examples have historically used it.
+func matchPathGlob(pattern, name string) bool {
+	pattern = strings.TrimPrefix(pattern, "./")
+	name = strings.TrimPrefix(name, "./")
+	patternParts := strings.Split(pattern, "/")
+	nameParts := strings.Split(name, "/")
+
+	type state struct{ pattern, name int }
+	memo := make(map[state]bool)
+	seen := make(map[state]bool)
+	var match func(int, int) bool
+	match = func(patternIndex, nameIndex int) bool {
+		current := state{pattern: patternIndex, name: nameIndex}
+		if seen[current] {
+			return memo[current]
+		}
+		seen[current] = true
+
+		var result bool
+		switch {
+		case patternIndex == len(patternParts):
+			result = nameIndex == len(nameParts)
+		case patternParts[patternIndex] == "**":
+			result = match(patternIndex+1, nameIndex) ||
+				(nameIndex < len(nameParts) && match(patternIndex, nameIndex+1))
+		case nameIndex < len(nameParts):
+			segmentMatch, err := pathpkg.Match(patternParts[patternIndex], nameParts[nameIndex])
+			result = err == nil && segmentMatch && match(patternIndex+1, nameIndex+1)
+		}
+		memo[current] = result
+		return result
+	}
+	return match(0, 0)
+}
+
+func parseFile(fset *token.FileSet, path, repoName, importPath string, generated, testFile bool) ([]Symbol, string, []string, []rawReference, string, string, *ast.File, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", nil, nil, "", "", nil, err
 	}
 
 	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", nil, nil, "", "", nil, err
 	}
 
 	pkgName := file.Name.Name
+	if testFile && strings.HasSuffix(pkgName, "_test") {
+		importPath = externalTestSymbolPath(importPath, pkgName)
+	}
 	pkgDoc := ""
 	if file.Doc != nil {
 		pkgDoc = file.Doc.Text()
@@ -290,7 +370,7 @@ func parseFile(fset *token.FileSet, path, repoName, importPath string, generated
 	symbols = extractDefaults(fset, file, symbols)
 	refs := collectReferences(fset, file, importPath, aliasMap)
 
-	return symbols, pkgDoc, imports, refs, nil
+	return symbols, pkgDoc, imports, refs, importPath, pkgName, file, nil
 }
 
 func extractFunc(fset *token.FileSet, d *ast.FuncDecl, repo, importPath, pkgName, filePath string, generated bool) Symbol {
@@ -518,7 +598,9 @@ func formatTypeSignature(fset *token.FileSet, ts *ast.TypeSpec) string {
 
 func exprString(fset *token.FileSet, expr ast.Expr) string {
 	var buf bytes.Buffer
-	printer.Fprint(&buf, fset, expr)
+	if err := printer.Fprint(&buf, fset, expr); err != nil {
+		return ""
+	}
 	return buf.String()
 }
 

@@ -10,15 +10,49 @@ import (
 
 // Config holds the server configuration.
 type Config struct {
-	Repos           []RepoConfig `yaml:"repos"`
-	ExcludePatterns []string     `yaml:"exclude_patterns"`
-	Transport       string       `yaml:"transport"`
-	Port            int          `yaml:"port"`
+	Repos                 []RepoConfig         `yaml:"repos"`
+	ExcludePatterns       []string             `yaml:"exclude_patterns"`
+	IncludeTests          bool                 `yaml:"include_tests"`
+	TypedMethodReferences bool                 `yaml:"typed_method_references"`
+	BuildContexts         []BuildContextConfig `yaml:"build_contexts"`
+	Transport             string               `yaml:"transport"`
+	Port                  int                  `yaml:"port"`
 }
 
 // RepoConfig describes a repository to index.
 type RepoConfig struct {
-	Path string `yaml:"path"`
+	Path                  string `yaml:"path"`
+	IncludeTests          *bool  `yaml:"include_tests,omitempty"`
+	TypedMethodReferences *bool  `yaml:"typed_method_references,omitempty"`
+}
+
+// BuildContextConfig selects one coherent Go build variant for typed method
+// reference analysis. Omitted contexts default to the running Go toolchain's
+// GOOS, GOARCH, cgo, release tags, and tool tags.
+type BuildContextConfig struct {
+	GOOS       string   `yaml:"goos"`
+	GOARCH     string   `yaml:"goarch"`
+	CGOEnabled *bool    `yaml:"cgo_enabled,omitempty"`
+	BuildTags  []string `yaml:"build_tags,omitempty"`
+	ToolTags   []string `yaml:"tool_tags,omitempty"`
+}
+
+// TestsEnabled returns the repository-specific test-indexing setting when one
+// is present, otherwise the configuration-wide default.
+func (r RepoConfig) TestsEnabled(defaultValue bool) bool {
+	if r.IncludeTests != nil {
+		return *r.IncludeTests
+	}
+	return defaultValue
+}
+
+// TypedReferencesEnabled returns the repository-specific typed-reference
+// setting when one is present, otherwise the configuration-wide default.
+func (r RepoConfig) TypedReferencesEnabled(defaultValue bool) bool {
+	if r.TypedMethodReferences != nil {
+		return *r.TypedMethodReferences
+	}
+	return defaultValue
 }
 
 // Load reads configuration from env vars or YAML file.
@@ -57,7 +91,7 @@ func Load() (*Config, error) {
 
 	// Apply defaults.
 	if len(cfg.ExcludePatterns) == 0 {
-		cfg.ExcludePatterns = []string{"vendor/**", "**/*_test.go", "testdata/**"}
+		cfg.ExcludePatterns = []string{"vendor/**", "testdata/**"}
 	}
 	if cfg.Transport == "" {
 		cfg.Transport = "stdio"

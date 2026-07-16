@@ -22,7 +22,7 @@ type FindReferencesArgs struct {
 func RegisterFindReferences(server *mcp.Server, holder *index.IndexHolder) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "find-references",
-		Description: `Returns call sites and package-qualified value references to a KNOWN symbol (exact package + name). Covers cross-package calls, qualified value refs (e.g. ErrFoo, DefaultConfig), and same-package unqualified calls. Does NOT cover method calls on values (x.Method()) since that requires type resolution — if you need method call sites and find-references misses them, fall back to search-symbols + read-symbol. If you've made code changes recently, call reindex first.`,
+		Description: `Returns call sites and package-qualified value references to a KNOWN symbol (exact package + name). Always covers cross-package calls, qualified value refs (e.g. ErrFoo, DefaultConfig), and same-package unqualified calls. When typed_method_references is enabled for the caller's repository, also covers go/types-resolved method calls, method values, method expressions, and promoted methods in the configured build contexts. Methods use Receiver.Method. Unresolved, excluded, or ill-typed selections are omitted rather than guessed. If you've made code changes recently, call reindex first.`,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args FindReferencesArgs) (*mcp.CallToolResult, any, error) {
 		limit := args.Limit
 		if limit <= 0 {
@@ -42,7 +42,7 @@ func RegisterFindReferences(server *mcp.Server, holder *index.IndexHolder) {
 		b.WriteString("\n\n")
 
 		if total == 0 {
-			b.WriteString("No indexed references found. Note: method calls on values (x.Method()) aren't tracked.\n")
+			b.WriteString("No indexed references found. Typed method selections require typed_method_references and are limited to configured build contexts; unresolved selections are omitted.\n")
 			return &mcp.CallToolResult{
 				Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
 			}, nil, nil
@@ -61,7 +61,13 @@ func RegisterFindReferences(server *mcp.Server, holder *index.IndexHolder) {
 			if a.Name != c.Name {
 				return a.Name < c.Name
 			}
-			return refs[i].Line < refs[j].Line
+			if refs[i].FilePath != refs[j].FilePath {
+				return refs[i].FilePath < refs[j].FilePath
+			}
+			if refs[i].Line != refs[j].Line {
+				return refs[i].Line < refs[j].Line
+			}
+			return refs[i].Column < refs[j].Column
 		})
 
 		for _, r := range refs {
@@ -71,7 +77,7 @@ func RegisterFindReferences(server *mcp.Server, holder *index.IndexHolder) {
 				caller = s.Receiver + "." + s.Name
 			}
 			fmt.Fprintf(&b, "[%s] %s.%s\n", strings.ToUpper(string(s.Kind)), s.PkgName, caller)
-			fmt.Fprintf(&b, "  %s | %s | %s:%d\n", s.ImportPath, s.Repo, filepath.Base(r.FilePath), r.Line)
+			fmt.Fprintf(&b, "  %s | %s | %s:%d:%d\n", s.ImportPath, s.Repo, filepath.Base(r.FilePath), r.Line, r.Column)
 			b.WriteString("\n")
 		}
 

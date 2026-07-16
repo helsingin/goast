@@ -205,9 +205,9 @@ func TestSearchSymbols_CaseInsensitive(t *testing.T) {
 func TestListPackages_All(t *testing.T) {
 	idx := buildTestIndex(t)
 	pkgs := idx.ListPackages("", true)
-	// greeter, secret (internal), app, sample (root — from generated.pb.go)
-	if len(pkgs) != 4 {
-		t.Errorf("expected 4 packages, got %d", len(pkgs))
+	// greeter, the real greeter_test package, secret (internal), app, and sample.
+	if len(pkgs) != 5 {
+		t.Errorf("expected 5 packages, got %d", len(pkgs))
 	}
 }
 
@@ -219,9 +219,9 @@ func TestListPackages_ExcludeInternal(t *testing.T) {
 			t.Errorf("expected no internal packages, got %s", p.ImportPath)
 		}
 	}
-	// Non-internal: greeter, app, sample
-	if len(pkgs) != 3 {
-		t.Errorf("expected 3 non-internal packages, got %d", len(pkgs))
+	// Non-internal: greeter, greeter_test, app, sample.
+	if len(pkgs) != 4 {
+		t.Errorf("expected 4 non-internal packages, got %d", len(pkgs))
 	}
 }
 
@@ -240,6 +240,7 @@ func TestGetSymbol_ByName(t *testing.T) {
 	s := idx.GetSymbol("example.com/sample/pkg/greeter", "NewGreeter")
 	if s == nil {
 		t.Fatal("expected to find NewGreeter")
+		return
 	}
 	if s.Kind != SymbolFunc {
 		t.Errorf("expected kind=func, got %s", s.Kind)
@@ -251,6 +252,7 @@ func TestGetSymbol_Method(t *testing.T) {
 	s := idx.GetSymbol("example.com/sample/pkg/greeter", "Greeter.Greet")
 	if s == nil {
 		t.Fatal("expected to find Greeter.Greet")
+		return
 	}
 	if s.Kind != SymbolMethod {
 		t.Errorf("expected kind=method, got %s", s.Kind)
@@ -273,6 +275,7 @@ func TestGetPackage_Found(t *testing.T) {
 	p := idx.GetPackage("example.com/sample/pkg/greeter")
 	if p == nil {
 		t.Fatal("expected to find greeter package")
+		return
 	}
 	if p.Name != "greeter" {
 		t.Errorf("expected name=greeter, got %s", p.Name)

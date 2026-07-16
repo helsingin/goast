@@ -3,6 +3,7 @@ package index
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -14,11 +15,23 @@ func testdataDir() string {
 func buildTestIndex(t *testing.T) *Index {
 	t.Helper()
 	cfg := IndexConfig{
-		Repos: []RepoConfig{{Path: testdataDir()}},
+		Repos: []RepoConfig{{Path: testdataDir(), TypedMethodReferences: true}},
 	}
 	idx, err := BuildIndex(cfg)
 	if err != nil {
 		t.Fatalf("BuildIndex: %v", err)
+	}
+	return idx
+}
+
+func buildTestIndexWithTests(t *testing.T) *Index {
+	t.Helper()
+	cfg := IndexConfig{
+		Repos: []RepoConfig{{Path: testdataDir(), IncludeTests: true, TypedMethodReferences: true}},
+	}
+	idx, err := BuildIndex(cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex with tests: %v", err)
 	}
 	return idx
 }
@@ -40,20 +53,86 @@ func TestBuildIndex_SymbolCount(t *testing.T) {
 	// generated.pb.go: MessageType(type), MessageType_UNKNOWN(const), MessageType_REQUEST(const),
 	//                   ProtoMessage(type), GetId(method), GetType(method) = 6
 	// generated_grpc.pb.go: GreeterServiceServer(type), UnsafeGreeterServiceServer(type) = 2
-	// Total: 32
-	if len(idx.Symbols) != 32 {
-		t.Errorf("expected 32 symbols, got %d", len(idx.Symbols))
+	// real_test/real.go: RealPackageSymbol(const) = 1
+	// Total: 33
+	if len(idx.Symbols) != 33 {
+		t.Errorf("expected 33 symbols, got %d", len(idx.Symbols))
 		for _, s := range idx.Symbols {
 			t.Logf("  %s %s.%s", s.Kind, s.PkgName, s.Name)
 		}
 	}
 }
 
+func TestBuildIndex_TestsDisabledByDefault(t *testing.T) {
+	idx := buildTestIndex(t)
+	for _, symbol := range idx.Symbols {
+		if strings.HasSuffix(symbol.FilePath, "_test.go") {
+			t.Fatalf("default index unexpectedly contains test symbol %s from %s", symbol.Name, symbol.FilePath)
+		}
+	}
+}
+
+func TestBuildIndex_IncludeInternalAndExternalTests(t *testing.T) {
+	idx := buildTestIndexWithTests(t)
+	if got, want := len(idx.Symbols), 39; got != want {
+		t.Fatalf("symbol count with tests: got %d, want %d", got, want)
+	}
+
+	wantPaths := map[string]string{
+		"TestInternalGreeterGreet": "example.com/sample/pkg/greeter",
+		"TestExternalGreeterGreet": "example.com/sample/pkg/greeter [greeter_test]",
+		"RealPackageSymbol":        "example.com/sample/pkg/greeter_test",
+	}
+	for name, wantPath := range wantPaths {
+		found := false
+		for _, symbol := range idx.Symbols {
+			if symbol.Name != name {
+				continue
+			}
+			found = true
+			if symbol.ImportPath != wantPath {
+				t.Errorf("%s import path: got %q, want %q", name, symbol.ImportPath, wantPath)
+			}
+		}
+		if !found {
+			t.Errorf("missing indexed test symbol %s", name)
+		}
+	}
+
+	foundExternalPackage := false
+	for _, pkg := range idx.Packages {
+		if pkg.ImportPath == "example.com/sample/pkg/greeter [greeter_test]" {
+			foundExternalPackage = true
+			if pkg.Name != "greeter_test" || pkg.FileCount != 1 || pkg.SymbolCount != 2 {
+				t.Errorf("external test package metadata: %+v", pkg)
+			}
+		}
+	}
+	if !foundExternalPackage {
+		t.Fatal("external test package was not indexed separately")
+	}
+}
+
+func TestBuildIndex_ExplicitTestExclusionWins(t *testing.T) {
+	cfg := IndexConfig{
+		Repos:           []RepoConfig{{Path: testdataDir(), IncludeTests: true}},
+		ExcludePatterns: []string{"**/*_test.go"},
+	}
+	idx, err := BuildIndex(cfg)
+	if err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+	if got, want := len(idx.Symbols), 33; got != want {
+		t.Fatalf("symbol count with explicit test exclusion: got %d, want %d", got, want)
+	}
+}
+
 func TestBuildIndex_Packages(t *testing.T) {
 	idx := buildTestIndex(t)
-	// Expected packages: greeter, secret, app, sample (root — from generated.pb.go)
-	if len(idx.Packages) != 4 {
-		t.Errorf("expected 4 packages, got %d", len(idx.Packages))
+	// Expected packages: greeter, greeter_test (a real production package),
+	// secret, app, sample (root — from generated.pb.go).
+	if len(idx.Packages) != 5 {
+		t.Errorf("expected 5 packages, got %d", len(idx.Packages))
 		for _, p := range idx.Packages {
 			t.Logf("  %s (%s)", p.ImportPath, p.Name)
 		}
@@ -511,6 +590,27 @@ func TestDeriveImportPath(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("DeriveImportPath(%q, %q, %q) = %q, want %q",
 				tt.modulePath, tt.repoRoot, tt.filePath, got, tt.want)
+		}
+	}
+}
+
+func TestMatchPathGlob(t *testing.T) {
+	tests := []struct {
+		pattern string
+		name    string
+		want    bool
+	}{
+		{"**/*_test.go", "pkg/greeter/greeter_test.go", true},
+		{"**/*_test.go", "greeter_test.go", true},
+		{"vendor/**", "vendor/example.com/lib/x.go", true},
+		{"testdata/**", "testdata/sample/pkg/file.go", true},
+		{"pkg/*/generated?.go", "pkg/api/generated1.go", true},
+		{"pkg/*/generated?.go", "pkg/api/nested/generated1.go", false},
+		{"**/*.go", "README.md", false},
+	}
+	for _, tt := range tests {
+		if got := matchPathGlob(tt.pattern, tt.name); got != tt.want {
+			t.Errorf("matchPathGlob(%q, %q) = %v, want %v", tt.pattern, tt.name, got, tt.want)
 		}
 	}
 }

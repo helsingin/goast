@@ -19,7 +19,7 @@ func testdataDir() string {
 func buildTestIndex(t *testing.T) *index.Index {
 	t.Helper()
 	cfg := index.IndexConfig{
-		Repos: []index.RepoConfig{{Path: testdataDir()}},
+		Repos: []index.RepoConfig{{Path: testdataDir(), TypedMethodReferences: true}},
 	}
 	idx, err := index.BuildIndex(cfg)
 	if err != nil {
@@ -34,7 +34,7 @@ func callTool(t *testing.T, name string, args map[string]any) string {
 
 	idx := buildTestIndex(t)
 	cfg := index.IndexConfig{
-		Repos: []index.RepoConfig{{Path: testdataDir()}},
+		Repos: []index.RepoConfig{{Path: testdataDir(), TypedMethodReferences: true}},
 	}
 	holder := index.NewHolder(idx, cfg)
 
@@ -60,7 +60,11 @@ func callTool(t *testing.T, name string, args map[string]any) string {
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
-	defer session.Close()
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Errorf("session.Close: %v", err)
+		}
+	})
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
@@ -322,6 +326,19 @@ func TestFindReferences_NewGreeter(t *testing.T) {
 	}
 }
 
+func TestFindReferences_GreeterMethod(t *testing.T) {
+	text := callTool(t, "find-references", map[string]any{
+		"package": "example.com/sample/pkg/greeter",
+		"name":    "Greeter.Greet",
+	})
+	if !strings.Contains(text, "found 1") {
+		t.Errorf("expected one method reference, got:\n%s", text)
+	}
+	if !strings.Contains(text, "app.Run") {
+		t.Errorf("expected caller app.Run, got:\n%s", text)
+	}
+}
+
 func TestFindReferences_NoResults(t *testing.T) {
 	text := callTool(t, "find-references", map[string]any{
 		"package": "example.com/sample/pkg/greeter",
@@ -529,7 +546,11 @@ func TestReindex_ToolsUseUpdatedIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
-	defer session.Close()
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Errorf("session.Close: %v", err)
+		}
+	})
 
 	// Call reindex first.
 	_, err = session.CallTool(ctx, &mcp.CallToolParams{

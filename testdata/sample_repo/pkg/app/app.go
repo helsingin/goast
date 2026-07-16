@@ -8,7 +8,7 @@ import "example.com/sample/pkg/greeter"
 // call references: greeter.NewGreeter and greeter.FormatGreeting.
 func Run(name string) string {
 	g := greeter.NewGreeter("Hi")
-	return greeter.FormatGreeting(g.Prefix, name)
+	return greeter.FormatGreeting(g.Greet(name), name)
 }
 
 // helper calls Run to produce a same-package unqualified reference.

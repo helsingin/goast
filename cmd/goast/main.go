@@ -29,13 +29,7 @@ func main() {
 	log.Printf("goast %s — indexing %d repos...", version, len(cfg.Repos))
 
 	start := time.Now()
-	idxCfg := index.IndexConfig{
-		Repos:           make([]index.RepoConfig, len(cfg.Repos)),
-		ExcludePatterns: cfg.ExcludePatterns,
-	}
-	for i, r := range cfg.Repos {
-		idxCfg.Repos[i] = index.RepoConfig{Path: r.Path}
-	}
+	idxCfg := makeIndexConfig(cfg)
 
 	idx, err := index.BuildIndex(idxCfg)
 	if err != nil {
@@ -52,14 +46,7 @@ func main() {
 		if loadErr != nil {
 			return index.IndexConfig{}, loadErr
 		}
-		fresh := index.IndexConfig{
-			Repos:           make([]index.RepoConfig, len(freshCfg.Repos)),
-			ExcludePatterns: freshCfg.ExcludePatterns,
-		}
-		for i, r := range freshCfg.Repos {
-			fresh.Repos[i] = index.RepoConfig{Path: r.Path}
-		}
-		return fresh, nil
+		return makeIndexConfig(freshCfg), nil
 	})
 	srv := server.New(holder)
 
@@ -83,7 +70,9 @@ func main() {
 		httpServer := &http.Server{Addr: addr, Handler: handler}
 		go func() {
 			<-ctx.Done()
-			httpServer.Shutdown(context.Background())
+			if err := httpServer.Shutdown(context.Background()); err != nil {
+				log.Printf("HTTP shutdown error: %v", err)
+			}
 		}()
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
@@ -91,4 +80,29 @@ func main() {
 	default:
 		log.Fatalf("Unknown transport: %s", cfg.Transport)
 	}
+}
+
+func makeIndexConfig(cfg *config.Config) index.IndexConfig {
+	result := index.IndexConfig{
+		Repos:           make([]index.RepoConfig, len(cfg.Repos)),
+		ExcludePatterns: cfg.ExcludePatterns,
+		BuildContexts:   make([]index.BuildContext, len(cfg.BuildContexts)),
+	}
+	for i, repo := range cfg.Repos {
+		result.Repos[i] = index.RepoConfig{
+			Path:                  repo.Path,
+			IncludeTests:          repo.TestsEnabled(cfg.IncludeTests),
+			TypedMethodReferences: repo.TypedReferencesEnabled(cfg.TypedMethodReferences),
+		}
+	}
+	for i, buildContext := range cfg.BuildContexts {
+		result.BuildContexts[i] = index.BuildContext{
+			GOOS:       buildContext.GOOS,
+			GOARCH:     buildContext.GOARCH,
+			CGOEnabled: buildContext.CGOEnabled,
+			BuildTags:  buildContext.BuildTags,
+			ToolTags:   buildContext.ToolTags,
+		}
+	}
+	return result
 }

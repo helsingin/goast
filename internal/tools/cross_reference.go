@@ -138,7 +138,7 @@ func handleMissingField(idx *index.Index, args CrossReferenceArgs) (string, bool
 	if capMissing && missingLimit > sectionCap {
 		missingLimit = sectionCap
 	}
-	b.WriteString(fmt.Sprintf("MISSING (%d):\n", len(missing)))
+	fmt.Fprintf(&b, "MISSING (%d):\n", len(missing))
 	for _, s := range missing[:missingLimit] {
 		fmt.Fprintf(&b, "  %-18s %s | %s\n", s.Name, s.ImportPath, s.Repo)
 		fmt.Fprintf(&b, "    Fields: %s\n", summarizeFields(s.Fields))
@@ -153,7 +153,7 @@ func handleMissingField(idx *index.Index, args CrossReferenceArgs) (string, bool
 	if capPresent && presentLimit > sectionCap {
 		presentLimit = sectionCap
 	}
-	b.WriteString(fmt.Sprintf("PRESENT (%d):\n", len(present)))
+	fmt.Fprintf(&b, "PRESENT (%d):\n", len(present))
 	for _, s := range present[:presentLimit] {
 		f := presentFields[s.ImportPath+"\x00"+s.Name]
 		fmt.Fprintf(&b, "  %-18s %s\n", s.Name, formatFieldDetail(f))
@@ -203,7 +203,7 @@ func handleFieldCoverage(idx *index.Index, args CrossReferenceArgs) (string, boo
 	if capWith && withLimit > sectionCap {
 		withLimit = sectionCap
 	}
-	b.WriteString(fmt.Sprintf("WITH %q (%d):\n", args.Field, len(with)))
+	fmt.Fprintf(&b, "WITH %q (%d):\n", args.Field, len(with))
 	for _, s := range with[:withLimit] {
 		f := withFields[s.ImportPath+"\x00"+s.Name]
 		fmt.Fprintf(&b, "  %-18s %s\n", s.Name, formatFieldDetail(f))
@@ -219,7 +219,7 @@ func handleFieldCoverage(idx *index.Index, args CrossReferenceArgs) (string, boo
 	if capWithout && withoutLimit > sectionCap {
 		withoutLimit = sectionCap
 	}
-	b.WriteString(fmt.Sprintf("WITHOUT %q (%d):\n", args.Field, len(without)))
+	fmt.Fprintf(&b, "WITHOUT %q (%d):\n", args.Field, len(without))
 	for _, s := range without[:withoutLimit] {
 		fmt.Fprintf(&b, "  %s\n", s.Name)
 		fmt.Fprintf(&b, "    %s | %s\n", s.ImportPath, s.Repo)
@@ -265,7 +265,7 @@ func handleUnimplementedServices(idx *index.Index, args CrossReferenceArgs) (str
 	if capUnimpl && unimplLimit > sectionCap {
 		unimplLimit = sectionCap
 	}
-	b.WriteString(fmt.Sprintf("UNIMPLEMENTED (%d):\n", len(unimpl)))
+	fmt.Fprintf(&b, "UNIMPLEMENTED (%d):\n", len(unimpl))
 	for _, svc := range unimpl[:unimplLimit] {
 		serviceName := strings.TrimSuffix(svc.Name, "ServiceServer")
 		fmt.Fprintf(&b, "  %-20s %s | %s\n", serviceName, svc.ImportPath, svc.Repo)
@@ -282,7 +282,7 @@ func handleUnimplementedServices(idx *index.Index, args CrossReferenceArgs) (str
 	if capImpl && implLimit > sectionCap {
 		implLimit = sectionCap
 	}
-	b.WriteString(fmt.Sprintf("IMPLEMENTED (%d):\n", len(impl)))
+	fmt.Fprintf(&b, "IMPLEMENTED (%d):\n", len(impl))
 	for _, svc := range impl[:implLimit] {
 		serviceName := strings.TrimSuffix(svc.Name, "ServiceServer")
 		types := implTypes[svc.ImportPath+"\x00"+svc.Name]

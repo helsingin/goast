@@ -14,7 +14,7 @@ func ParseGoMod(goModPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open go.mod: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

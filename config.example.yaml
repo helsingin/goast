@@ -1,11 +1,30 @@
+include_tests: false
+typed_method_references: false
+
 repos:
   - path: /path/to/service-a
   - path: /path/to/service-b
+    # Overrides the top-level default for this repository only.
+    include_tests: true
+    typed_method_references: true
 
 exclude_patterns:
   - "vendor/**"
-  - "**/*_test.go"
   - "testdata/**"
+  # Explicit excludes take precedence over include_tests. Uncomment to omit
+  # tests even from repositories that opt in; ** matches any directory depth.
+  # - "**/*_test.go"
+
+# Omit build_contexts to analyze typed references for the server's host Go
+# build context. Add explicit coherent contexts to union multiple targets:
+# build_contexts:
+#   - goos: linux
+#     goarch: amd64
+#     cgo_enabled: false
+#   - goos: js
+#     goarch: wasm
+#     cgo_enabled: false
+#     build_tags: [purego]
 
 transport: stdio
 port: 7400

@@ -47,13 +47,17 @@ cp config.example.yaml config.yaml
 Edit `config.yaml` so it points at one or more Go repositories:
 
 ```yaml
+include_tests: false
+typed_method_references: false
+
 repos:
   - path: /path/to/service-a
   - path: /path/to/service-b
+    include_tests: true
+    typed_method_references: true
 
 exclude_patterns:
   - "vendor/**"
-  - "**/*_test.go"
   - "testdata/**"
 
 transport: stdio
@@ -105,7 +109,8 @@ make build
 - Searches functions, methods, types, structs, interfaces, constants, and vars.
 - Reads exact source ranges for known symbols, with optional import blocks.
 - Maps Go's implicit interface relationships from method sets.
-- Finds indexed call sites and package-qualified value references.
+- Finds indexed call sites and package-qualified value references, with
+  opt-in `go/types`-proven method selections.
 - Lists gRPC service interfaces from generated protobuf files.
 - Builds a cross-repository dependency graph from real import statements.
 - Searches struct fields by name, type, tag, and doc comment.
@@ -124,8 +129,10 @@ refresh the index after edits.
 The Go parser already exposes the structure that agents usually need first:
 packages, declarations, receivers, methods, imports, comments, fields, and
 source positions. `goast` uses that structure directly instead of requiring a
-full build, a running language server, or a type-checking environment for every
-indexed repository.
+full build or a running language server. When enabled, a focused, non-fatal
+`go/types` pass adds receiver-aware method references when the selection can be
+proved from indexed source and available dependencies in a coherent build
+context.
 
 That tradeoff keeps startup fast and makes the server useful in workspaces that
 contain incomplete branches, generated files, service-specific build tags, or
@@ -217,7 +224,8 @@ The MCP server registers these tools:
 - `read-symbol`: read the source for a function, method, type, const, or var.
 - `find-implementations`: map interfaces to implementations or concrete types
   to interfaces.
-- `find-references`: find indexed call sites and package-qualified references.
+- `find-references`: find indexed calls and package-qualified references, plus
+  opt-in type-proven method selections.
 - `list-services`: list gRPC service interfaces from generated protobuf code.
 - `list-dependencies`: show cross-repository import dependencies.
 - `search-config`: search struct fields, tags, types, and config comments.
@@ -247,25 +255,85 @@ GOAST_CONFIG=/path/to/config.yaml goast
 GOAST_REPOS=/path/repo-a,/path/repo-b goast
 ```
 
-The YAML form supports repository paths, exclude patterns, and transport
-settings:
+The YAML form supports repository paths, opt-in test and typed-reference
+indexing, coherent build contexts, exclude patterns, and transport settings:
 
 ```yaml
+include_tests: false
+typed_method_references: false
+
 repos:
   - path: /path/to/service-a
   - path: /path/to/service-b
+    include_tests: true
+    typed_method_references: true
 
 exclude_patterns:
   - "vendor/**"
-  - "**/*_test.go"
   - "testdata/**"
 
 transport: stdio
 port: 7400
 ```
 
-When no exclude patterns are provided, `goast` skips `vendor/**`,
-`**/*_test.go`, and `testdata/**` by default.
+Test indexing is disabled by default so a multi-repository fleet does not pay
+the index-size and type-checking cost for tests unless they are useful. The
+top-level `include_tests` value is the default for every repository. A
+repository-level `include_tests` value overrides it, so one focused repository
+can include tests while the rest of the fleet remains production-only:
+
+```yaml
+include_tests: true
+
+repos:
+  - path: /path/to/service-a
+  - path: /path/to/large-service-b
+    include_tests: false
+```
+
+Internal test files (`package widget`) join the normal package at its ordinary
+import path. External test packages (`package widget_test`) use a distinct,
+non-importable synthetic path such as
+`example.com/project/widget [widget_test]`, so their symbols and callers cannot
+collide with either `example.com/project/widget` or a real legal import path
+that happens to end in `_test`.
+
+Exclude patterns are applied even when test indexing is enabled. Consequently,
+an explicit `**/*_test.go` pattern excludes test files from every opted-in
+repository. Patterns use slash-separated path segments; `**` matches zero or
+more directories, while a pattern without a slash is matched against every
+file basename. If `exclude_patterns` is omitted, the defaults are `vendor/**`
+and `testdata/**`.
+
+Typed method references are also opt-in because retaining and type-checking
+package syntax has a real startup and peak-memory cost in large fleets. The
+top-level `typed_method_references` value is the default; an individual
+repository can override it. Syntax-derived function and package-qualified
+references remain enabled regardless.
+
+With typed analysis enabled and no `build_contexts`, GoAST uses the server's
+host Go build context. Explicit contexts union references from multiple
+coherent variants while deduplicating shared files by exact file, line, and
+column:
+
+```yaml
+build_contexts:
+  - goos: linux
+    goarch: amd64
+    cgo_enabled: false
+  - goos: js
+    goarch: wasm
+    cgo_enabled: false
+    build_tags: [purego]
+```
+
+Build and tool tags are normalized and invalid contexts fail indexing instead
+of silently producing an empty graph. When an explicit target differs from the
+host and `cgo_enabled` is omitted, it defaults to `false`. Host tool tags are
+preserved when GOARCH is unchanged; when GOARCH changes they are cleared unless
+`tool_tags` is supplied. Standard-library imports and type sizes come from the
+selected target rather than host export data. Receiver selections that still
+cannot be proven are omitted, never guessed.
 
 ## MCP Client Setup
 
@@ -410,19 +478,28 @@ An integration needs:
 - An MCP client that can run a stdio command or connect to streamable HTTP.
 - A policy decision about which repositories and generated files should be in
   scope.
+- A policy decision about whether tests should be indexed globally or only for
+  selected repositories.
+- A policy decision about whether typed method references justify their
+  startup/memory cost and which build contexts they should cover.
 - A habit of calling `reindex` after code-changing agent operations.
 
 No repository needs to compile as part of startup. `goast` parses source files
-and builds its index from Go ASTs.
+and builds its structural index from Go ASTs. Opted-in repositories retain only
+method selections that the build-context-aware `go/types` pass can prove.
 
 ## What It Is Not
 
 `goast` is not a Go language server. It does not replace `gopls`, editor
-diagnostics, build tags, type checking, code completion, or refactoring tools.
+diagnostics, build-tag-aware builds, complete type checking, code completion,
+or refactoring tools.
 
-It is not a full semantic analyzer. Package-qualified references are indexed,
-but local value method calls such as `x.Method()` require type resolution and
-are intentionally outside the current scope.
+It is not a full semantic analyzer. When enabled, `find-references` uses
+`go/types` to index proved method calls, method values, method expressions, and
+promoted methods in declared build contexts, in addition to syntax-derived
+function and package-qualified references. A receiver selection that cannot be
+resolved because source is incomplete, ill-typed, excluded, or unavailable is
+omitted rather than guessed.
 
 It is not a security scanner, compliance engine, build system, or generic
 full-text search service. It is a focused MCP server for structured Go code
@@ -468,3 +545,9 @@ Run the optional integration test against a real local Go repository:
 ```bash
 GOAST_INTEGRATION_REPO=/path/to/go/repo go test ./internal/tools
 ```
+
+Set `GOAST_INTEGRATION_INCLUDE_TESTS=1` to exercise test indexing and
+`GOAST_INTEGRATION_TYPED_METHOD_REFERENCES=1` for typed receiver selections. To
+require a specific reference target, also set
+`GOAST_INTEGRATION_REFERENCE_PACKAGE` and
+`GOAST_INTEGRATION_REFERENCE_NAME` (methods use `Receiver.Method`).

@@ -78,7 +78,7 @@ func readSourceLines(filePath string, start, end int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []string
 	scanner := bufio.NewScanner(f)
@@ -108,7 +108,7 @@ func readDocComment(filePath string, symbolLine int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Read all lines up to the symbol line.
 	var allLines []string
@@ -148,7 +148,7 @@ func readImportBlock(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []string
 	inImport := false

@@ -22,13 +22,18 @@ func realRepoHolder(t *testing.T) *index.IndexHolder {
 
 	cfg := index.IndexConfig{
 		Repos: []index.RepoConfig{
-			{Path: repoPath},
+			{
+				Path:                  repoPath,
+				IncludeTests:          os.Getenv("GOAST_INTEGRATION_INCLUDE_TESTS") == "1",
+				TypedMethodReferences: os.Getenv("GOAST_INTEGRATION_TYPED_METHOD_REFERENCES") == "1",
+			},
 		},
 	}
 	idx, err := index.BuildIndex(cfg)
 	if err != nil {
 		t.Fatalf("BuildIndex: %v", err)
 	}
+	t.Logf("indexed %d symbols in %d packages (include tests: %v)", len(idx.Symbols), len(idx.Packages), cfg.Repos[0].IncludeTests)
 	return index.NewHolder(idx, cfg)
 }
 
@@ -55,7 +60,11 @@ func callRealTool(t *testing.T, holder *index.IndexHolder, name string, args map
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
-	defer session.Close()
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Errorf("session.Close: %v", err)
+		}
+	})
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
@@ -128,4 +137,46 @@ func TestIntegration_ReadSymbol(t *testing.T) {
 		t.Error("expected func in read-symbol output")
 	}
 	t.Logf("read-symbol %s.%s (first 500 chars):\n%s", sym.ImportPath, sym.Name, text[:min(500, len(text))])
+}
+
+func TestIntegration_FindMethodReferences(t *testing.T) {
+	holder := realRepoHolder(t)
+	idx := holder.Get()
+	for _, symbol := range idx.Symbols {
+		if symbol.Kind != index.SymbolMethod || symbol.Receiver == "" {
+			continue
+		}
+		name := symbol.Receiver + "." + symbol.Name
+		if len(idx.FindReferences(symbol.ImportPath, name)) == 0 {
+			continue
+		}
+		text := callRealTool(t, holder, "find-references", map[string]any{
+			"package": symbol.ImportPath,
+			"name":    name,
+		})
+		if !strings.Contains(text, "found") || strings.Contains(text, "found 0") {
+			t.Fatalf("method reference output for %s.%s:\n%s", symbol.ImportPath, name, text)
+		}
+		return
+	}
+	t.Skip("repository contains no receiver-resolved method references")
+}
+
+func TestIntegration_FindConfiguredReferences(t *testing.T) {
+	packagePath := os.Getenv("GOAST_INTEGRATION_REFERENCE_PACKAGE")
+	name := os.Getenv("GOAST_INTEGRATION_REFERENCE_NAME")
+	if packagePath == "" || name == "" {
+		t.Skip("set GOAST_INTEGRATION_REFERENCE_PACKAGE and GOAST_INTEGRATION_REFERENCE_NAME")
+	}
+
+	holder := realRepoHolder(t)
+	refs := holder.Get().FindReferences(packagePath, name)
+	if len(refs) == 0 {
+		t.Fatalf("no references found for configured target %s.%s", packagePath, name)
+	}
+	text := callRealTool(t, holder, "find-references", map[string]any{
+		"package": packagePath,
+		"name":    name,
+	})
+	t.Logf("configured reference output:\n%s", text)
 }
