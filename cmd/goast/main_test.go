@@ -13,7 +13,7 @@ func TestMakeIndexConfigResolvesRepositoryTestOverrides(t *testing.T) {
 		IncludeTests:          true,
 		TypedMethodReferences: false,
 		Repos: []config.RepoConfig{
-			{Path: "/inherit"},
+			{Name: "stable-inherit", Path: "/inherit"},
 			{Path: "/override", IncludeTests: &disabled, TypedMethodReferences: &enabled},
 		},
 		ExcludePatterns: []string{"vendor/**"},
@@ -27,6 +27,9 @@ func TestMakeIndexConfigResolvesRepositoryTestOverrides(t *testing.T) {
 	got := makeIndexConfig(cfg)
 	if len(got.Repos) != 2 {
 		t.Fatalf("repository count: got %d, want 2", len(got.Repos))
+	}
+	if got.Repos[0].Name != "stable-inherit" || got.Repos[1].Name != "override" {
+		t.Errorf("repository names were not stabilized from configured paths: %+v", got.Repos)
 	}
 	if !got.Repos[0].IncludeTests {
 		t.Error("first repository did not inherit include_tests: true")

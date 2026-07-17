@@ -21,6 +21,7 @@ type Config struct {
 
 // RepoConfig describes a repository to index.
 type RepoConfig struct {
+	Name                  string `yaml:"name,omitempty"`
 	Path                  string `yaml:"path"`
 	IncludeTests          *bool  `yaml:"include_tests,omitempty"`
 	TypedMethodReferences *bool  `yaml:"typed_method_references,omitempty"`

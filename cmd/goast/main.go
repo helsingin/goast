@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -89,7 +90,12 @@ func makeIndexConfig(cfg *config.Config) index.IndexConfig {
 		BuildContexts:   make([]index.BuildContext, len(cfg.BuildContexts)),
 	}
 	for i, repo := range cfg.Repos {
+		name := repo.Name
+		if name == "" {
+			name = filepath.Base(filepath.Clean(repo.Path))
+		}
 		result.Repos[i] = index.RepoConfig{
+			Name:                  name,
 			Path:                  repo.Path,
 			IncludeTests:          repo.TestsEnabled(cfg.IncludeTests),
 			TypedMethodReferences: repo.TypedReferencesEnabled(cfg.TypedMethodReferences),

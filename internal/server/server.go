@@ -26,6 +26,7 @@ func New(holder *index.IndexHolder) *mcp.Server {
 	tools.RegisterSearchConfig(server, holder)
 	tools.RegisterCrossReference(server, holder)
 	tools.RegisterReindex(server, holder)
+	tools.RegisterIndexStatus(server, holder)
 
 	return server
 }

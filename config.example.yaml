@@ -2,7 +2,10 @@ include_tests: false
 typed_method_references: false
 
 repos:
-  - path: /path/to/service-a
+  # Optional name keeps repository filters stable when worktree_root changes
+  # the active filesystem path. Without it, the configured basename is used.
+  - name: service-a
+    path: /path/to/service-a
   - path: /path/to/service-b
     # Overrides the top-level default for this repository only.
     include_tests: true

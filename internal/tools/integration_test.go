@@ -50,6 +50,7 @@ func callRealTool(t *testing.T, holder *index.IndexHolder, name string, args map
 	RegisterListServices(server, holder)
 	RegisterListDependencies(server, holder)
 	RegisterReindex(server, holder)
+	RegisterIndexStatus(server, holder)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()

@@ -11,7 +11,8 @@ func TestLoadIncludeTestsDefaultsAndRepositoryOverride(t *testing.T) {
 	configPath := writeConfig(t, `
 include_tests: true
 repos:
-  - path: /repo/inherit
+  - name: stable-inherit
+    path: /repo/inherit
   - path: /repo/disable
     include_tests: false
 `)
@@ -24,6 +25,9 @@ repos:
 	}
 	if !cfg.Repos[0].TestsEnabled(cfg.IncludeTests) {
 		t.Error("first repository should inherit include_tests: true")
+	}
+	if cfg.Repos[0].Name != "stable-inherit" {
+		t.Errorf("repository name was not decoded: %q", cfg.Repos[0].Name)
 	}
 	if cfg.Repos[1].TestsEnabled(cfg.IncludeTests) {
 		t.Error("second repository should override include_tests to false")

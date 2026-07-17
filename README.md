@@ -51,7 +51,8 @@ include_tests: false
 typed_method_references: false
 
 repos:
-  - path: /path/to/service-a
+  - name: service-a
+    path: /path/to/service-a
   - path: /path/to/service-b
     include_tests: true
     typed_method_references: true
@@ -118,6 +119,10 @@ make build
 - Runs set operations for missing implementations, missing fields, field
   coverage, and unimplemented generated services.
 - Rebuilds the in-memory index during an active agent session.
+- Switches a live session between registered Git worktrees without restarting
+  the MCP client.
+- Reports the published generation, active roots, and captured Git branch/HEAD
+  provenance.
 - Serves MCP over stdio or streamable HTTP.
 
 The agent does not need to guess where code lives. It can ask for the package
@@ -214,6 +219,11 @@ Use `reindex` after an agent adds, removes, renames, or moves Go symbols. The
 server rebuilds the in-memory index from disk so later source reads and line
 numbers match the edited workspace.
 
+When the agent moves to another linked Git worktree, pass its absolute root as
+`worktree_root`. A successful selection persists across later argument-free
+reindexes. Use `reset_worktrees: true` to return to the configured roots, and
+use `index-status` whenever the active source tree needs to be proved.
+
 ## Tool Surface
 
 The MCP server registers these tools:
@@ -230,7 +240,10 @@ The MCP server registers these tools:
 - `list-dependencies`: show cross-repository import dependencies.
 - `search-config`: search struct fields, tags, types, and config comments.
 - `cross-reference`: run set operations across symbols, fields, and services.
-- `reindex`: rebuild the index from disk.
+- `reindex`: rebuild the index, optionally selecting or resetting a live Git
+  worktree override.
+- `index-status`: report the published generation, active roots, counts, and
+  captured Git selection provenance.
 
 The tools are intentionally small and composable. A coding agent can combine
 them during a refactor instead of relying on one large, lossy codebase summary.
@@ -263,7 +276,8 @@ include_tests: false
 typed_method_references: false
 
 repos:
-  - path: /path/to/service-a
+  - name: service-a
+    path: /path/to/service-a
   - path: /path/to/service-b
     include_tests: true
     typed_method_references: true
@@ -334,6 +348,61 @@ preserved when GOARCH is unchanged; when GOARCH changes they are cleared unless
 `tool_tags` is supplied. Standard-library imports and type sizes come from the
 selected target rather than host export data. Receiver selections that still
 cannot be proven are omitted, never guessed.
+
+An optional repository `name` remains stable when the active path moves to a
+linked worktree. If omitted, GoAST freezes the configured path's basename as
+the logical name when that configuration is loaded; it does not rename the
+repository after a worktree switch.
+
+### Live Git Worktree Switching
+
+GoAST can switch a running MCP server to another registered worktree of a
+configured Git repository:
+
+```json
+{
+  "worktree_root": "/absolute/path/to/feature-worktree"
+}
+```
+
+The path must be absolute, resolve to the exact top level of a worktree listed
+by `git worktree list`, and share Git's canonical common directory with at
+least one configured repository. An unrelated clone is rejected even when it
+has the same module path and commit. In a monorepo, every configured Go module
+belonging to that Git repository is mapped to the same relative directory in
+the selected worktree; other configured repositories are unchanged.
+
+The override belongs to one running GoAST process and persists across ordinary
+`reindex` calls. Separate stdio GoAST processes can therefore work on different
+worktrees concurrently. HTTP clients connected to the same server share its
+single process-local selection and must coordinate changes. Return to the
+YAML/environment roots with:
+
+```json
+{
+  "reset_worktrees": true
+}
+```
+
+Validation, configuration loading, indexing, and selected-worktree provenance
+verification complete before publication. The selected branch and HEAD must
+match the pre-build selection when checked after the rebuild. A rejected path,
+missing mapped `go.mod`, configuration error, changed selection, or index build
+failure leaves the prior index, generation, roots, and worktree selection
+authoritative.
+Rebuilds are serialized while ordinary queries continue reading the previous
+immutable generation. If a configuration reload removes the owner of an active
+override, the reindex fails until `reset_worktrees` explicitly clears it.
+
+`index-status` reports configured and active module paths, logical repository
+names, symbol/package counts, generation, and branch/HEAD selection provenance.
+Override provenance comes from the selection verified for that published
+generation; Git metadata for ordinary configured roots is best-effort. HEAD
+identifies the selected Git revision; uncommitted source is indexed but is
+intentionally not represented by the HEAD value. Live switching requires the
+`git` executable at runtime with support for
+`git worktree list --porcelain -z`. Ordinary indexing of configured non-Git
+source directories remains supported when no worktree override is requested.
 
 ## MCP Client Setup
 
@@ -483,6 +552,9 @@ An integration needs:
 - A policy decision about whether typed method references justify their
   startup/memory cost and which build contexts they should cover.
 - A habit of calling `reindex` after code-changing agent operations.
+- For live worktree switching, a local `git` executable supporting
+  `git worktree list --porcelain -z` and registered linked worktrees belonging
+  to configured repositories.
 
 No repository needs to compile as part of startup. `goast` parses source files
 and builds its structural index from Go ASTs. Opted-in repositories retain only

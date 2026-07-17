@@ -49,6 +49,7 @@ func callTool(t *testing.T, name string, args map[string]any) string {
 	RegisterSearchConfig(server, holder)
 	RegisterCrossReference(server, holder)
 	RegisterReindex(server, holder)
+	RegisterIndexStatus(server, holder)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
 
@@ -535,6 +536,7 @@ func TestReindex_ToolsUseUpdatedIndex(t *testing.T) {
 	RegisterSearchConfig(server, holder)
 	RegisterCrossReference(server, holder)
 	RegisterReindex(server, holder)
+	RegisterIndexStatus(server, holder)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
 

@@ -17,6 +17,7 @@ import (
 
 // RepoConfig describes a repository to index.
 type RepoConfig struct {
+	Name                  string
 	Path                  string
 	IncludeTests          bool
 	TypedMethodReferences bool
@@ -75,7 +76,7 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 	// First pass: collect module paths.
 	for _, rc := range cfg.Repos {
 		repoRoot := rc.Path
-		repoName := filepath.Base(repoRoot)
+		repoName := repoConfigName(rc)
 		goModPath := filepath.Join(repoRoot, "go.mod")
 		modulePath, err := ParseGoMod(goModPath)
 		if err != nil {
@@ -90,7 +91,7 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 
 	for _, rc := range cfg.Repos {
 		repoRoot := rc.Path
-		repoName := filepath.Base(repoRoot)
+		repoName := repoConfigName(rc)
 
 		goModPath := filepath.Join(repoRoot, "go.mod")
 		modulePath, err := ParseGoMod(goModPath)
@@ -255,6 +256,13 @@ func shouldExclude(filePath, repoRoot string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+func repoConfigName(repo RepoConfig) string {
+	if repo.Name != "" {
+		return repo.Name
+	}
+	return filepath.Base(filepath.Clean(repo.Path))
 }
 
 // matchPathGlob matches slash-separated paths with filepath-style segment

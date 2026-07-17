@@ -133,6 +133,24 @@ server through `IndexHolder`.
 Tool handlers always read the current index from the holder, so they see the
 new index immediately after `reindex` completes.
 
+`reindex` also accepts a process-local `worktree_root`. GoAST canonicalizes the
+absolute path, proves that Git registers it as a worktree, and matches its Git
+common directory against configured repositories. Configured Go modules in
+that repository are projected into the selected worktree by their relative
+paths, preserving logical repository names and all indexing options.
+
+`IndexHolder` serializes configuration load, worktree validation, index build,
+and publication. Queries continue using the prior immutable index while a
+replacement is built. Index, effective roots, persisted overrides, counts,
+generation, and captured branch/HEAD provenance are published under one lock;
+any failure publishes none of them. The selected branch and HEAD are checked
+again after the build and must match the pre-build selection. Argument-free
+reindexes retain successful overrides, while `reset_worktrees` returns to
+configured roots. Removing an override's configured owner requires an explicit
+reset rather than silently changing roots. `index-status` reads only stored
+provenance of the published generation rather than querying mutable Git state
+after the fact; non-override configured-root Git metadata is best-effort.
+
 ## Interface Matching
 
 `find-implementations` uses normalized method descriptors, such as:
