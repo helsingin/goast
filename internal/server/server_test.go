@@ -12,7 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestNewRegistersWorktreeToolsAndSchema(t *testing.T) {
+func TestNewRegistersWorktreeAndImpactToolsAndSchema(t *testing.T) {
 	_, filename, _, _ := runtime.Caller(0)
 	repository := filepath.Join(filepath.Dir(filename), "..", "..", "testdata", "sample_repo")
 	config := index.IndexConfig{Repos: []index.RepoConfig{{Path: repository}}}
@@ -42,6 +42,7 @@ func TestNewRegistersWorktreeToolsAndSchema(t *testing.T) {
 	}
 	foundStatus := false
 	foundReindex := false
+	foundImpact := false
 	for _, tool := range result.Tools {
 		switch tool.Name {
 		case "index-status":
@@ -57,9 +58,20 @@ func TestNewRegistersWorktreeToolsAndSchema(t *testing.T) {
 					t.Errorf("reindex schema missing %s: %s", field, schema)
 				}
 			}
+		case "impact-since":
+			foundImpact = true
+			schema, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatalf("marshal impact schema: %v", err)
+			}
+			for _, field := range []string{"repository", "base_commit"} {
+				if !strings.Contains(string(schema), field) {
+					t.Errorf("impact schema missing %s: %s", field, schema)
+				}
+			}
 		}
 	}
-	if !foundStatus || !foundReindex {
-		t.Fatalf("registered tools: index-status=%t reindex=%t", foundStatus, foundReindex)
+	if !foundStatus || !foundReindex || !foundImpact {
+		t.Fatalf("registered tools: index-status=%t reindex=%t impact-since=%t", foundStatus, foundReindex, foundImpact)
 	}
 }

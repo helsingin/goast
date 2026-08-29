@@ -32,16 +32,16 @@ func main() {
 	start := time.Now()
 	idxCfg := makeIndexConfig(cfg)
 
-	idx, err := index.BuildIndex(idxCfg)
+	holder, err := index.BuildHolder(idxCfg)
 	if err != nil {
 		log.Fatalf("Failed to build index: %v", err)
 	}
+	idx := holder.Get()
 
 	elapsed := time.Since(start)
 	log.Printf("Indexed %d symbols in %d packages (%.1fs)",
 		len(idx.Symbols), len(idx.Packages), elapsed.Seconds())
 
-	holder := index.NewHolder(idx, idxCfg)
 	holder.SetConfigLoader(func() (index.IndexConfig, error) {
 		freshCfg, loadErr := config.Load()
 		if loadErr != nil {

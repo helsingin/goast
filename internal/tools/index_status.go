@@ -16,7 +16,7 @@ type IndexStatusArgs struct{}
 func RegisterIndexStatus(server *mcp.Server, holder *index.IndexHolder) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "index-status",
-		Description: "Report the exact index generation currently visible to tools, including symbol/package counts, configured and active repository roots, and captured Git worktree branch/HEAD provenance.",
+		Description: "Report the exact index generation currently visible to tools, including symbol/package counts, configured and active repository roots, and captured Git branch, HEAD, tracked, untracked, and combined worktree provenance.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args IndexStatusArgs) (*mcp.CallToolResult, any, error) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -48,10 +48,12 @@ func formatIndexStatus(status index.IndexStatus) string {
 		if repository.GitRoot != "" {
 			fmt.Fprintf(
 				&output,
-				" git_root=%s branch=%s head=%s worktree_override=%t",
+				" git_root=%s branch=%s head=%s worktree_digest=%s toolchain=%q worktree_override=%t",
 				repository.GitRoot,
 				repository.Branch,
 				repository.Head,
+				repository.WorktreeDigest,
+				repository.ToolchainIdentity,
 				repository.WorktreeOverride,
 			)
 		}

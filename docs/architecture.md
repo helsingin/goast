@@ -142,14 +142,23 @@ paths, preserving logical repository names and all indexing options.
 `IndexHolder` serializes configuration load, worktree validation, index build,
 and publication. Queries continue using the prior immutable index while a
 replacement is built. Index, effective roots, persisted overrides, counts,
-generation, and captured branch/HEAD provenance are published under one lock;
-any failure publishes none of them. The selected branch and HEAD are checked
-again after the build and must match the pre-build selection. Argument-free
+generation, and captured branch/HEAD/worktree provenance are published under
+one lock; any failure publishes none of them. HEAD, tracked-diff digest, and
+untracked-manifest digest are checked again after the build and must match the
+pre-build source snapshot. Argument-free
 reindexes retain successful overrides, while `reset_worktrees` returns to
 configured roots. Removing an override's configured owner requires an explicit
 reset rather than silently changing roots. `index-status` reads only stored
 provenance of the published generation rather than querying mutable Git state
 after the fact; non-override configured-root Git metadata is best-effort.
+
+`impact-since` is permitted only for a Git-backed repository whose current HEAD
+and combined worktree digest still match the published generation. It compares
+the indexed worktree to a resolved base commit, hashes complete declaration
+contents so body-only edits remain visible, preserves deleted base declarations,
+and computes the structural blast radius from references, implicit interfaces,
+configuration types, generated service interfaces, tests, and cross-repository
+imports. The returned canonical impact digest covers the complete report.
 
 ## Interface Matching
 

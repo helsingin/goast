@@ -1,6 +1,7 @@
 package index
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -59,6 +60,32 @@ func TestBuildIndex_SymbolCount(t *testing.T) {
 		t.Errorf("expected 33 symbols, got %d", len(idx.Symbols))
 		for _, s := range idx.Symbols {
 			t.Logf("  %s %s.%s", s.Kind, s.PkgName, s.Name)
+		}
+	}
+}
+
+func TestBuildIndex_SkipsUnavailableRepositories(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	notDirectory := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(notDirectory, []byte("not a repository"), 0o600); err != nil {
+		t.Fatalf("create non-directory repository path: %v", err)
+	}
+
+	idx, err := BuildIndex(IndexConfig{Repos: []RepoConfig{
+		{Name: "missing", Path: missing},
+		{Name: "file", Path: notDirectory},
+		{Name: "sample", Path: testdataDir()},
+	}})
+	if err != nil {
+		t.Fatalf("BuildIndex: %v", err)
+	}
+	if got, want := len(idx.Symbols), 33; got != want {
+		t.Fatalf("symbol count: got %d, want %d", got, want)
+	}
+	for _, symbol := range idx.Symbols {
+		if symbol.Repo == "missing" || symbol.Repo == "file" {
+			t.Fatalf("indexed unavailable repository %q: %+v", symbol.Repo, symbol)
 		}
 	}
 }

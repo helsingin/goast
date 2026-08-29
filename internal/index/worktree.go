@@ -260,6 +260,7 @@ func captureRepositoryStatus(
 				entry.Branch = worktree.Branch
 				entry.Head = worktree.Head
 				entry.WorktreeOverride = true
+				populateRepositorySourceIdentity(&entry)
 				status[i] = entry
 				continue
 			}
@@ -274,9 +275,41 @@ func captureRepositoryStatus(
 				entry.Head = worktree.Head
 			}
 		}
+		populateRepositorySourceIdentity(&entry)
 		status[i] = entry
 	}
 	return status
+}
+
+func populateRepositorySourceIdentity(entry *RepositoryStatus) {
+	if entry.GitRoot == "" {
+		return
+	}
+	identity, err := captureCurrentSourceIdentity(entry.GitRoot)
+	if err != nil {
+		return
+	}
+	entry.TrackedDiffDigest = identity.TrackedDiffDigest
+	entry.UntrackedDigest = identity.UntrackedManifestDigest
+	entry.WorktreeDigest = identity.WorktreeDigest
+	entry.ToolchainIdentity = identity.ToolchainIdentity
+}
+
+func validateRepositorySourceStability(before, after []RepositoryStatus) error {
+	beforeByName := make(map[string]RepositoryStatus, len(before))
+	for _, repository := range before {
+		beforeByName[repository.Name] = repository
+	}
+	for _, repository := range after {
+		previous, found := beforeByName[repository.Name]
+		if !found || previous.WorktreeDigest == "" || repository.WorktreeDigest == "" {
+			continue
+		}
+		if previous.Head != repository.Head || previous.WorktreeDigest != repository.WorktreeDigest {
+			return fmt.Errorf("repository %q changed while its index was being built; reindex again", repository.Name)
+		}
+	}
+	return nil
 }
 
 func registeredWorktreeRoots(directory string) ([]string, error) {

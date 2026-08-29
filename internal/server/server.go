@@ -27,6 +27,7 @@ func New(holder *index.IndexHolder) *mcp.Server {
 	tools.RegisterCrossReference(server, holder)
 	tools.RegisterReindex(server, holder)
 	tools.RegisterIndexStatus(server, holder)
+	tools.RegisterImpactSince(server, holder)
 
 	return server
 }

@@ -31,6 +31,10 @@ type RepositoryStatus struct {
 	GitCommonDir          string
 	Branch                string
 	Head                  string
+	TrackedDiffDigest     string
+	UntrackedDigest       string
+	WorktreeDigest        string
+	ToolchainIdentity     string
 	WorktreeOverride      bool
 }
 
@@ -81,12 +85,37 @@ type IndexHolder struct {
 func NewHolder(idx *Index, cfg IndexConfig) *IndexHolder {
 	configured := freezeRepoNames(cfg)
 	active := cloneIndexConfig(configured)
+	return newHolder(idx, configured, active, captureRepositoryStatus(configured, active, nil, nil))
+}
+
+// BuildHolder builds the initial index and publishes it only when the source
+// snapshot remains unchanged for the complete build.
+func BuildHolder(cfg IndexConfig) (*IndexHolder, error) {
+	return buildHolderWith(cfg, BuildIndex)
+}
+
+func buildHolderWith(cfg IndexConfig, build func(IndexConfig) (*Index, error)) (*IndexHolder, error) {
+	configured := freezeRepoNames(cfg)
+	active := cloneIndexConfig(configured)
+	before := captureRepositoryStatus(configured, active, nil, nil)
+	idx, err := build(active)
+	if err != nil {
+		return nil, err
+	}
+	after := captureRepositoryStatus(configured, active, nil, nil)
+	if err := validateRepositorySourceStability(before, after); err != nil {
+		return nil, err
+	}
+	return newHolder(idx, configured, active, after), nil
+}
+
+func newHolder(idx *Index, configured, active IndexConfig, repositories []RepositoryStatus) *IndexHolder {
 	return &IndexHolder{
 		idx:           idx,
 		buildIndex:    BuildIndex,
 		configuredCfg: configured,
 		activeCfg:     active,
-		repositories:  captureRepositoryStatus(configured, active, nil, nil),
+		repositories:  append([]RepositoryStatus(nil), repositories...),
 		overrides:     make(map[string]WorktreeStatus),
 		generation:    1,
 	}
@@ -172,6 +201,7 @@ func (h *IndexHolder) ReindexWithOptions(options ReindexOptions) (ReindexResult,
 	if err != nil {
 		return ReindexResult{}, err
 	}
+	beforeRepositories := captureRepositoryStatus(configured, active, refreshedOverrides, repositoryOverrides)
 
 	newIdx, err := buildIndex(active)
 	if err != nil {
@@ -182,6 +212,9 @@ func (h *IndexHolder) ReindexWithOptions(options ReindexOptions) (ReindexResult,
 		return ReindexResult{}, err
 	}
 	repositories := captureRepositoryStatus(configured, active, refreshedOverrides, repositoryOverrides)
+	if err := validateRepositorySourceStability(beforeRepositories, repositories); err != nil {
+		return ReindexResult{}, err
+	}
 
 	h.mu.Lock()
 	h.idx = newIdx

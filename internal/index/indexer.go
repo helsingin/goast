@@ -42,6 +42,8 @@ type IndexConfig struct {
 
 // BuildIndex walks all configured repos, parses Go files, and builds an in-memory index.
 func BuildIndex(cfg IndexConfig) (*Index, error) {
+	cfg.Repos = availableRepos(cfg.Repos)
+
 	var allSymbols []Symbol
 	var allPackages []Package
 	var allRawRefs []rawReference
@@ -237,6 +239,26 @@ func BuildIndex(cfg IndexConfig) (*Index, error) {
 	idx := NewIndex(allSymbols, allPackages, deps)
 	idx.buildReferences(allRawRefs)
 	return idx, nil
+}
+
+// availableRepos removes configured paths that cannot be indexed before the
+// indexing passes begin. A stale path in a shared config should not prevent
+// the remaining repositories from being indexed.
+func availableRepos(repos []RepoConfig) []RepoConfig {
+	available := make([]RepoConfig, 0, len(repos))
+	for _, repo := range repos {
+		info, err := os.Stat(repo.Path)
+		if err != nil {
+			log.Printf("WARNING: skipping repo %s: configured directory unavailable: %v", repoConfigName(repo), err)
+			continue
+		}
+		if !info.IsDir() {
+			log.Printf("WARNING: skipping repo %s: configured path is not a directory: %s", repoConfigName(repo), repo.Path)
+			continue
+		}
+		available = append(available, repo)
+	}
+	return available
 }
 
 func shouldExclude(filePath, repoRoot string, patterns []string) bool {

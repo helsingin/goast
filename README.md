@@ -243,7 +243,11 @@ The MCP server registers these tools:
 - `reindex`: rebuild the index, optionally selecting or resetting a live Git
   worktree override.
 - `index-status`: report the published generation, active roots, counts, and
-  captured Git selection provenance.
+  captured Git source provenance, including worktree digests.
+- `impact-since`: compare one current indexed Git worktree with a resolved base
+  commit and return changed declarations, callers, implicit interfaces,
+  configuration types, generated services, candidate tests, cross-repository
+  dependants, an exact source snapshot, and a deterministic impact digest.
 
 The tools are intentionally small and composable. A coding agent can combine
 them during a refactor instead of relying on one large, lossy codebase summary.
@@ -395,11 +399,12 @@ immutable generation. If a configuration reload removes the owner of an active
 override, the reindex fails until `reset_worktrees` explicitly clears it.
 
 `index-status` reports configured and active module paths, logical repository
-names, symbol/package counts, generation, and branch/HEAD selection provenance.
+names, symbol/package counts, generation, branch/HEAD selection provenance, and
+tracked, untracked, and combined worktree digests.
 Override provenance comes from the selection verified for that published
 generation; Git metadata for ordinary configured roots is best-effort. HEAD
-identifies the selected Git revision; uncommitted source is indexed but is
-intentionally not represented by the HEAD value. Live switching requires the
+identifies the selected Git revision; the worktree digests additionally bind
+uncommitted tracked changes and non-ignored untracked content. Live switching requires the
 `git` executable at runtime with support for
 `git worktree list --porcelain -z`. Ordinary indexing of configured non-Git
 source directories remains supported when no worktree override is requested.
