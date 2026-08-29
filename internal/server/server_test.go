@@ -12,7 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestNewRegistersWorktreeAndImpactToolsAndSchema(t *testing.T) {
+func TestNewRegistersWorktreeImpactAndStructuralWitnessToolsAndSchema(t *testing.T) {
 	_, filename, _, _ := runtime.Caller(0)
 	repository := filepath.Join(filepath.Dir(filename), "..", "..", "testdata", "sample_repo")
 	config := index.IndexConfig{Repos: []index.RepoConfig{{Path: repository}}}
@@ -43,6 +43,7 @@ func TestNewRegistersWorktreeAndImpactToolsAndSchema(t *testing.T) {
 	foundStatus := false
 	foundReindex := false
 	foundImpact := false
+	foundStructuralWitness := false
 	for _, tool := range result.Tools {
 		switch tool.Name {
 		case "index-status":
@@ -69,9 +70,20 @@ func TestNewRegistersWorktreeAndImpactToolsAndSchema(t *testing.T) {
 					t.Errorf("impact schema missing %s: %s", field, schema)
 				}
 			}
+		case "analyze-structural-witness":
+			foundStructuralWitness = true
+			schema, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatalf("marshal structural witness schema: %v", err)
+			}
+			for _, field := range []string{"invariant_id", "entry_symbols", "enforcement_symbols", "sink_symbols", "binding_requirements"} {
+				if !strings.Contains(string(schema), field) {
+					t.Errorf("structural witness schema missing %s: %s", field, schema)
+				}
+			}
 		}
 	}
-	if !foundStatus || !foundReindex || !foundImpact {
-		t.Fatalf("registered tools: index-status=%t reindex=%t impact-since=%t", foundStatus, foundReindex, foundImpact)
+	if !foundStatus || !foundReindex || !foundImpact || !foundStructuralWitness {
+		t.Fatalf("registered tools: index-status=%t reindex=%t impact-since=%t structural-witness=%t", foundStatus, foundReindex, foundImpact, foundStructuralWitness)
 	}
 }

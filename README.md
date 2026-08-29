@@ -248,9 +248,23 @@ The MCP server registers these tools:
   commit and return changed declarations, callers, implicit interfaces,
   configuration types, generated services, candidate tests, cross-repository
   dependants, an exact source snapshot, and a deterministic impact digest.
+- `analyze-structural-witness`: evaluate one frozen `must-pass-through` rule
+  against the exact published Git snapshot with bounded interprocedural SSA.
+  The deterministic report includes declared and candidate sinks, witnessed
+  paths, bypass/binding/failure-open counterexamples, unresolved dynamic edges,
+  limitations, complete-rule digest, generation, status, and canonical report
+  digest.
 
 The tools are intentionally small and composable. A coding agent can combine
 them during a refactor instead of relying on one large, lossy codebase summary.
+
+Structural analysis requires exactly one configured repository plus frozen
+entry, enforcement, sink, build-context, binding, permit-type, and fail-closed
+policy mappings. It returns `complete` only when every declared sink is
+witnessed in every requested context with no counterexample or unresolved edge.
+`counterexample`, `no-witness-discovered`, `indeterminate`, and `stale` are
+explicit non-passing outcomes; the absence of a discovered witness is not
+reported as proof of a bypass.
 
 ## Configuration
 

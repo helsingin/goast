@@ -160,6 +160,31 @@ and computes the structural blast radius from references, implicit interfaces,
 configuration types, generated service interfaces, tests, and cross-repository
 imports. The returned canonical impact digest covers the complete report.
 
+## Structural Witness Analysis
+
+`analyze-structural-witness` is a separate, opt-in typed analysis over one
+frozen repository snapshot. It loads the requested build contexts with
+`go/packages`, constructs SSA, and walks the reachable call graph from declared
+entries. The analyzer checks that each declared sink passes through an allowed
+enforcement result, that required payload/destination/policy/principal carriers
+remain bound, that permit values are not reused or substituted, and that errors
+fail closed. It also enumerates candidate egress calls by registered sink or
+egress-operation identity so an alternate sink cannot disappear merely because
+it was omitted from the declared mapping.
+
+The report is deterministic and source-bound: repository HEAD/worktree identity
+and Goast generation must still match the published index. A canonical rule
+digest binds all scope, symbol, permit, binding, and failure-policy inputs, and
+the report digest covers that identity plus the sink universes, witnesses,
+counterexamples, unresolved edges, limitations, and status. Every declared sink
+must be witnessed in every frozen build context for `complete`.
+
+This is bounded static evidence rather than a whole-program runtime proof.
+Unmapped interface dispatch and other unresolved dynamic calls produce an
+`indeterminate` result. Reflection, plugins, externally generated code absent
+from the snapshot, and runtime/deployment behavior remain outside the analysis
+boundary and are stated in the report limitations.
+
 ## Interface Matching
 
 `find-implementations` uses normalized method descriptors, such as:

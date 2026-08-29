@@ -28,6 +28,7 @@ func New(holder *index.IndexHolder) *mcp.Server {
 	tools.RegisterReindex(server, holder)
 	tools.RegisterIndexStatus(server, holder)
 	tools.RegisterImpactSince(server, holder)
+	tools.RegisterAnalyzeStructuralWitness(server, holder)
 
 	return server
 }

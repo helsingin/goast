@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -51,6 +52,7 @@ func callRealTool(t *testing.T, holder *index.IndexHolder, name string, args map
 	RegisterListDependencies(server, holder)
 	RegisterReindex(server, holder)
 	RegisterIndexStatus(server, holder)
+	RegisterAnalyzeStructuralWitness(server, holder)
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -82,6 +84,27 @@ func callRealTool(t *testing.T, holder *index.IndexHolder, name string, args map
 		}
 	}
 	return text
+}
+
+func TestIntegration_StructuralWitness(t *testing.T) {
+	rawRule := os.Getenv("GOAST_INTEGRATION_STRUCTURAL_RULE")
+	if rawRule == "" {
+		t.Skip("set GOAST_INTEGRATION_STRUCTURAL_RULE to an exact JSON structural rule")
+	}
+	var rule index.StructuralWitnessRule
+	if err := json.Unmarshal([]byte(rawRule), &rule); err != nil {
+		t.Fatalf("decode GOAST_INTEGRATION_STRUCTURAL_RULE: %v", err)
+	}
+	holder := realRepoHolder(t)
+	report, err := holder.AnalyzeStructuralWitness(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("structural witness status=%s digest=%s witnesses=%d counterexamples=%d unresolved=%d snapshot=%+v",
+		report.Status, report.ReportDigest, len(report.WitnessedSinks), len(report.Counterexamples), len(report.UnresolvedEdges), report.Snapshot)
+	if expected := os.Getenv("GOAST_INTEGRATION_EXPECT_STATUS"); expected != "" && string(report.Status) != expected {
+		t.Fatalf("status = %s, want %s; report = %#v", report.Status, expected, report)
+	}
 }
 
 func TestIntegration_ListPackages(t *testing.T) {
