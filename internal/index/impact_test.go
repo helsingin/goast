@@ -138,7 +138,7 @@ func TestImpactDigestMatchesIntentContract(t *testing.T) {
 		},
 		AffectedRepositories: []string{"worker", "service"},
 	}
-	const expected = "11e57b5dfcf3e93cca11b0647156bdcaea3deb6e1e2a768b1c7e4bfeaa87465f"
+	const expected = "b3c09270ac1001e4e052e01ffeba5faca1fca82399efb9499a1c641bb9d6af5b"
 	if got := ImpactDigest(report); got != expected {
 		t.Fatalf("impact digest contract = %s", got)
 	}

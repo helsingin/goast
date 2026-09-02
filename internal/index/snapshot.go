@@ -20,9 +20,9 @@ type SourceSnapshot struct {
 	TrackedDiffDigest       string `json:"tracked_diff_digest"`
 	UntrackedManifestDigest string `json:"untracked_manifest_digest"`
 	WorktreeDigest          string `json:"worktree_digest"`
-	Generation              uint64 `json:"goast_generation"`
 	StructuralProvider      string `json:"structural_provider"`
 	StructuralGeneration    string `json:"structural_generation"`
+	Generation              uint64 `json:"goast_generation"`
 	ToolchainIdentity       string `json:"toolchain_identity"`
 }
 
