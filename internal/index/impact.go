@@ -24,6 +24,7 @@ const (
 
 type SymbolIdentity struct {
 	Repository string     `json:"repository"`
+	Language   string     `json:"language"`
 	Package    string     `json:"package"`
 	Name       string     `json:"name"`
 	Kind       SymbolKind `json:"kind"`
@@ -346,7 +347,7 @@ func parseSymbolContents(source []byte, module, repository, relativePath string,
 			return
 		}
 		result = append(result, parsedSymbolContent{
-			identity: SymbolIdentity{Repository: repository, Package: importPath, Name: name, Kind: kind},
+			identity: SymbolIdentity{Repository: repository, Language: "go", Package: importPath, Name: name, Kind: kind},
 			digest:   fmt.Sprintf("%x", sha256.Sum256(source[start:end])),
 		})
 	}
@@ -408,7 +409,7 @@ func identityFromSymbol(symbol Symbol) SymbolIdentity {
 	if symbol.Kind == SymbolMethod && symbol.Receiver != "" {
 		name = symbol.Receiver + "." + symbol.Name
 	}
-	return SymbolIdentity{Repository: symbol.Repo, Package: symbol.ImportPath, Name: name, Kind: symbol.Kind}
+	return SymbolIdentity{Repository: symbol.Repo, Language: "go", Package: symbol.ImportPath, Name: name, Kind: symbol.Kind}
 }
 
 func ImpactDigest(report ImpactReport) string {

@@ -115,6 +115,14 @@ func TestStructuralWitnessRejectsSourceDriftAfterPublishedGeneration(t *testing.
 	}
 }
 
+func TestStructuralWitnessRejectsNonGoSymbolLanguage(t *testing.T) {
+	rule := structuralFixtureRule("Release")
+	rule.EntrySymbols[0].Language = "kotlin"
+	if err := validateStructuralRule(rule); err == nil || !strings.Contains(err.Error(), "language go") {
+		t.Fatalf("non-Go structural symbol was accepted: %v", err)
+	}
+}
+
 func structuralFixtureHolder(t *testing.T) *IndexHolder {
 	t.Helper()
 	holder, _ := structuralFixtureHolderWithRoot(t)
@@ -174,10 +182,10 @@ func structuralFixtureRule(entry string) StructuralWitnessRule {
 		InvariantID:         "INV-RELEASE-001",
 		Relation:            "must-pass-through",
 		Scope:               StructuralScope{Repositories: []string{"fixture"}, BuildContexts: []string{"default"}},
-		EntrySymbols:        []SymbolIdentity{{Repository: "fixture", Package: "example.test/structural/release", Name: entry, Kind: SymbolFunc}},
-		EnforcementSymbols:  []SymbolIdentity{{Repository: "fixture", Package: "example.test/structural/release", Name: "Authorize", Kind: SymbolFunc}},
-		SinkSymbols:         []SymbolIdentity{{Repository: "fixture", Package: "example.test/structural/release", Name: "Sink.Send", Kind: SymbolMethod}},
-		PermitTypes:         []SymbolIdentity{{Repository: "fixture", Package: "example.test/structural/release", Name: "Permit", Kind: SymbolType}},
+		EntrySymbols:        []SymbolIdentity{{Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: entry, Kind: SymbolFunc}},
+		EnforcementSymbols:  []SymbolIdentity{{Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: "Authorize", Kind: SymbolFunc}},
+		SinkSymbols:         []SymbolIdentity{{Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: "Sink.Send", Kind: SymbolMethod}},
+		PermitTypes:         []SymbolIdentity{{Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: "Permit", Kind: SymbolType}},
 		BindingRequirements: []string{"payload-digest", "destination"},
 		FailurePolicy:       "fail-closed",
 	}

@@ -21,6 +21,8 @@ type SourceSnapshot struct {
 	UntrackedManifestDigest string `json:"untracked_manifest_digest"`
 	WorktreeDigest          string `json:"worktree_digest"`
 	Generation              uint64 `json:"goast_generation"`
+	StructuralProvider      string `json:"structural_provider"`
+	StructuralGeneration    string `json:"structural_generation"`
 	ToolchainIdentity       string `json:"toolchain_identity"`
 }
 
@@ -42,13 +44,19 @@ func captureSourceSnapshot(root, repository, base string, generation uint64) (So
 	if err != nil {
 		return SourceSnapshot{}, fmt.Errorf("resolve base revision %q: %w", base, err)
 	}
+	providerGeneration := structuralProviderGeneration(generation, identity.ToolchainIdentity, identity.WorktreeDigest)
 	return SourceSnapshot{
 		Repository: repository, BaseCommit: baseCommit, HeadCommit: identity.HeadCommit,
 		Branch: identity.Branch, TrackedDiffDigest: identity.TrackedDiffDigest,
 		UntrackedManifestDigest: identity.UntrackedManifestDigest,
 		WorktreeDigest:          identity.WorktreeDigest, Generation: generation,
+		StructuralProvider: "goast", StructuralGeneration: providerGeneration,
 		ToolchainIdentity: identity.ToolchainIdentity,
 	}, nil
+}
+
+func structuralProviderGeneration(generation uint64, toolchainIdentity, worktreeDigest string) string {
+	return digestParts("goast-structural-provider/v1", fmt.Sprint(generation), toolchainIdentity, worktreeDigest)
 }
 
 func captureCurrentSourceIdentity(root string) (sourceIdentity, error) {

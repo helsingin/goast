@@ -132,7 +132,8 @@ func (h *IndexHolder) AnalyzeStructuralWitness(rule StructuralWitnessRule) (Stru
 		Snapshot: SourceSnapshot{
 			Repository: repository.Name, HeadCommit: repository.Head, Branch: repository.Branch,
 			TrackedDiffDigest: repository.TrackedDiffDigest, UntrackedManifestDigest: repository.UntrackedDigest,
-			WorktreeDigest: repository.WorktreeDigest, Generation: generation, ToolchainIdentity: repository.ToolchainIdentity,
+			WorktreeDigest: repository.WorktreeDigest, Generation: generation, StructuralProvider: "goast",
+			StructuralGeneration: structuralProviderGeneration(generation, repository.ToolchainIdentity, repository.WorktreeDigest), ToolchainIdentity: repository.ToolchainIdentity,
 		},
 		GoastGeneration: generation, AnalysisMode: "bounded-interprocedural-ssa", RuleDigest: StructuralWitnessRuleDigest(rule),
 		EntrySymbols: cloneSymbolIdentities(rule.EntrySymbols), EnforcementSymbols: cloneSymbolIdentities(rule.EnforcementSymbols),
@@ -518,13 +519,13 @@ func structuralCallIdentity(call *ssa.Call, repository string) (SymbolIdentity, 
 	}
 	if common.Method != nil && common.Method.Pkg() != nil {
 		receiver := receiverTypeNameFromGoType(common.Method.Type().(*types.Signature).Recv().Type())
-		return SymbolIdentity{Repository: repository, Package: common.Method.Pkg().Path(), Name: receiver + "." + common.Method.Name(), Kind: SymbolMethod}, true
+		return SymbolIdentity{Repository: repository, Language: "go", Package: common.Method.Pkg().Path(), Name: receiver + "." + common.Method.Name(), Kind: SymbolMethod}, true
 	}
 	return SymbolIdentity{}, false
 }
 
 func structuralFunctionIdentity(function *ssa.Function, repository string) SymbolIdentity {
-	identity := SymbolIdentity{Repository: repository, Name: function.Name(), Kind: SymbolFunc}
+	identity := SymbolIdentity{Repository: repository, Language: "go", Name: function.Name(), Kind: SymbolFunc}
 	if function.Pkg != nil && function.Pkg.Pkg != nil {
 		identity.Package = function.Pkg.Pkg.Path()
 	}
@@ -563,6 +564,11 @@ func validateStructuralRule(rule StructuralWitnessRule) error {
 	}
 	if len(rule.Scope.BuildContexts) == 0 || len(rule.EntrySymbols) == 0 || len(rule.EnforcementSymbols) == 0 || len(rule.SinkSymbols) == 0 {
 		return fmt.Errorf("build contexts, entries, enforcement symbols, and sinks are required")
+	}
+	for _, symbol := range append(append(append(append([]SymbolIdentity(nil), rule.EntrySymbols...), rule.EnforcementSymbols...), rule.SinkSymbols...), rule.PermitTypes...) {
+		if symbol.Language != "go" {
+			return fmt.Errorf("Goast structural symbols require language go, got %q for %s", symbol.Language, structuralSymbolDisplay(symbol))
+		}
 	}
 	if rule.FailurePolicy != "fail-closed" {
 		return fmt.Errorf("unsupported failure policy %q", rule.FailurePolicy)
@@ -622,7 +628,7 @@ func modulePrefix(entries []SymbolIdentity) string {
 }
 
 func structuralSymbolKey(symbol SymbolIdentity) string {
-	return symbol.Repository + "\x00" + symbol.Package + "\x00" + symbol.Name + "\x00" + string(symbol.Kind)
+	return symbol.Repository + "\x00" + symbol.Language + "\x00" + symbol.Package + "\x00" + symbol.Name + "\x00" + string(symbol.Kind)
 }
 
 func structuralSymbolDisplay(symbol SymbolIdentity) string {

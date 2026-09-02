@@ -81,8 +81,14 @@ type ExampleServiceServer interface { Get(); Put() }
 	if report.Snapshot.Repository != "service" || report.Snapshot.BaseCommit != fixture.base ||
 		report.Snapshot.HeadCommit == "" || report.Snapshot.TrackedDiffDigest == "" ||
 		report.Snapshot.UntrackedManifestDigest == "" || report.Snapshot.WorktreeDigest == "" ||
-		report.Snapshot.Generation != 1 || report.Snapshot.ToolchainIdentity == "" || report.ImpactDigest == "" {
+		report.Snapshot.Generation != 1 || report.Snapshot.StructuralProvider != "goast" || len(report.Snapshot.StructuralGeneration) != 64 ||
+		report.Snapshot.ToolchainIdentity == "" || report.ImpactDigest == "" {
 		t.Fatalf("snapshot or digest incomplete: %#v", report)
+	}
+	for _, change := range report.ChangedSymbols {
+		if change.Symbol.Language != "go" {
+			t.Fatalf("changed symbol lacks Go language identity: %#v", change.Symbol)
+		}
 	}
 	if report.ImpactDigest != ImpactDigest(report) {
 		t.Fatalf("impact digest is not reproducible: %#v", report)
@@ -112,27 +118,27 @@ func TestImpactDigestMatchesIntentContract(t *testing.T) {
 		Snapshot: SourceSnapshot{
 			Repository: "service", BaseCommit: "base", HeadCommit: "head", Branch: "main",
 			TrackedDiffDigest: "tracked", UntrackedManifestDigest: "untracked",
-			WorktreeDigest: "worktree", Generation: 9, ToolchainIdentity: "go1.test test/arch",
+			WorktreeDigest: "worktree", Generation: 9, StructuralProvider: "goast", StructuralGeneration: strings.Repeat("a", 64), ToolchainIdentity: "go1.test test/arch",
 		},
 		ChangedFiles: []FileChange{
 			{Path: "z.go", Status: "M"}, {Path: "a.go", OldPath: "old.go", Status: "R"},
 		},
 		ChangedSymbols: []SymbolChange{
-			{Symbol: SymbolIdentity{Repository: "service", Package: "example.test/policy", Name: "Engine.Decide", Kind: SymbolMethod}, Change: SymbolModified},
-			{Symbol: SymbolIdentity{Repository: "service", Package: "example.test/policy", Name: "Config", Kind: SymbolType}, Change: SymbolAdded},
+			{Symbol: SymbolIdentity{Repository: "service", Language: "go", Package: "example.test/policy", Name: "Engine.Decide", Kind: SymbolMethod}, Change: SymbolModified},
+			{Symbol: SymbolIdentity{Repository: "service", Language: "go", Package: "example.test/policy", Name: "Config", Kind: SymbolType}, Change: SymbolAdded},
 		},
 		AffectedSymbols: []SymbolIdentity{
-			{Repository: "service", Package: "example.test/release", Name: "Enforcer.Release", Kind: SymbolMethod},
+			{Repository: "service", Language: "go", Package: "example.test/release", Name: "Enforcer.Release", Kind: SymbolMethod},
 		},
 		Interfaces:    []SymbolIdentity{},
-		ConfigStructs: []SymbolIdentity{{Repository: "service", Package: "example.test/policy", Name: "Config", Kind: SymbolType}},
+		ConfigStructs: []SymbolIdentity{{Repository: "service", Language: "go", Package: "example.test/policy", Name: "Config", Kind: SymbolType}},
 		Services:      []SymbolIdentity{},
 		CandidateTests: []SymbolIdentity{
-			{Repository: "service", Package: "example.test/policy", Name: "TestDefaultDeny", Kind: SymbolFunc},
+			{Repository: "service", Language: "go", Package: "example.test/policy", Name: "TestDefaultDeny", Kind: SymbolFunc},
 		},
 		AffectedRepositories: []string{"worker", "service"},
 	}
-	const expected = "d40868eb16519e75f44c3d104530288297717cb777cb095d7d8dc07fa2a673d8"
+	const expected = "11e57b5dfcf3e93cca11b0647156bdcaea3deb6e1e2a768b1c7e4bfeaa87465f"
 	if got := ImpactDigest(report); got != expected {
 		t.Fatalf("impact digest contract = %s", got)
 	}
