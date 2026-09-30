@@ -165,25 +165,38 @@ imports. The returned canonical impact digest covers the complete report.
 `analyze-structural-witness` is a separate, opt-in typed analysis over one
 frozen repository snapshot. It loads the requested build contexts with
 `go/packages`, constructs SSA, and walks the reachable call graph from declared
-entries. The analyzer checks that each declared sink passes through an allowed
-enforcement result, that required payload/destination/policy/principal carriers
-remain bound, that permit values are not reused or substituted, and that errors
-fail closed. It also enumerates candidate egress calls by registered sink or
-egress-operation identity so an alternate sink cannot disappear merely because
-it was omitted from the declared mapping.
+entries. At discovered calls matching declared sinks, it checks for a dominating
+enforcement operation whose result affects the sink. Dominance, argument binding, and
+error-branch checks operate within the function containing the sink. Binding
+requirements use argument name/type heuristics and exact SSA value identity;
+they do not establish alias safety or cryptographic digest correctness. Optional
+permit-type declarations are digest-bound metadata, not a permit-provenance or
+single-use check. Candidate egress discovery uses registered sinks and a small
+set of operation names; it is not an exhaustive sink inventory.
 
 The report is deterministic and source-bound: repository HEAD/worktree identity
 and Goast generation must still match the published index. A canonical rule
 digest binds all scope, symbol, permit, binding, and failure-policy inputs, and
 the report digest covers that identity plus the sink universes, witnesses,
-counterexamples, unresolved edges, limitations, and status. Every declared sink
-must be witnessed in every frozen build context for `complete`.
+counterexamples, unresolved edges, limitations, and status. Symbol identities
+include `language: "go"`; snapshots include `structural_provider: "goast"`
+and a structural generation digest derived from the numeric index generation,
+toolchain identity, and worktree digest.
+
+`complete` requires a witness for every declared sink in every requested build
+context, with no counterexample or unresolved edge. Coverage uses full symbol
+identities paired with context names. Missing pairs are listed in `limitations`
+and produce `no-witness-discovered` unless a counterexample or unresolved edge
+takes precedence. Partial witnesses are retained, and missing coverage is not
+treated as proof of a bypass. Source drift is rejected with an error asking for
+reindexing rather than a report with `status: "stale"`.
 
 This is bounded static evidence rather than a whole-program runtime proof.
-Unmapped interface dispatch and other unresolved dynamic calls produce an
-`indeterminate` result. Reflection, plugins, externally generated code absent
-from the snapshot, and runtime/deployment behavior remain outside the analysis
-boundary and are stated in the report limitations.
+Recorded unmapped interface dispatch produces an `indeterminate` result when
+there are no counterexamples. Other dynamic calls, reflection, goroutines,
+deferred calls, and runtime/deployment behavior are not comprehensively modeled.
+The generic limitations field is not an exhaustive list of these gaps. See the
+[README](../README.md#structural-analysis-limits) for usage constraints.
 
 ## Interface Matching
 

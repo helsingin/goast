@@ -27,7 +27,8 @@ func RegisterAnalyzeStructuralWitness(server *mcp.Server, holder *index.IndexHol
 		Name: "analyze-structural-witness",
 		Description: "Evaluate one frozen must-pass-through structural invariant against an exact Goast source generation. " +
 			"Returns deterministic source-bound witnesses, concrete bypass/binding/failure counterexamples, explicit unresolved edges, " +
-			"and separate declared and candidate sink universes. Absence of a counterexample is never promoted to completeness.",
+			"and separate declared and candidate sink universes. Completeness requires a witness for every declared sink in every requested build context, " +
+			"with no counterexample or unresolved edge.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args AnalyzeStructuralWitnessArgs) (*mcp.CallToolResult, any, error) {
 		report, err := holder.AnalyzeStructuralWitness(index.StructuralWitnessRule{
 			Version: args.Version, InvariantID: strings.TrimSpace(args.InvariantID), Relation: strings.TrimSpace(args.Relation),
@@ -53,6 +54,9 @@ func formatStructuralWitnessReport(report index.StructuralWitnessReport) string 
 	}
 	for _, unresolved := range report.UnresolvedEdges {
 		fmt.Fprintf(&output, "- unresolved %s -> %s | %s\n", unresolved.From.Name, unresolved.Target, unresolved.Reason)
+	}
+	for _, limitation := range report.Limitations {
+		fmt.Fprintf(&output, "- limitation: %s\n", limitation)
 	}
 	fmt.Fprintf(&output, "Report digest: %s", report.ReportDigest)
 	return output.String()

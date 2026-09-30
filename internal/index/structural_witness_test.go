@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,83 @@ func TestStructuralWitnessDoesNotUseTestOnlyOrExcludedBuildContext(t *testing.T)
 	}
 	if report.Status != StructuralWitnessComplete {
 		t.Fatalf("production-tagged witness = %#v", report)
+	}
+}
+
+func TestStructuralWitnessRequiresEverySinkInEveryBuildContext(t *testing.T) {
+	holder := structuralFixtureHolder(t)
+	otherSink := SymbolIdentity{Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: "OtherSend", Kind: SymbolFunc}
+	missingSink := SymbolIdentity{Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: "Sink.NotPresent", Kind: SymbolMethod}
+	for _, tc := range []struct {
+		name          string
+		entry         string
+		contexts      []string
+		extraSinks    []SymbolIdentity
+		wantStatus    StructuralWitnessStatus
+		wantWitnesses int
+	}{
+		{"unwitnessed declared sink", "Valid", []string{"default"}, []SymbolIdentity{missingSink}, StructuralWitnessNoWitnessDiscovered, 1},
+		{"context without a sink call", "DefaultOnlySink", []string{"default", "production"}, nil, StructuralWitnessNoWitnessDiscovered, 1},
+		{"different sink in each context", "SplitCoverage", []string{"default", "production"}, []SymbolIdentity{otherSink}, StructuralWitnessNoWitnessDiscovered, 2},
+		{"no witnesses", "Authorize", []string{"default"}, nil, StructuralWitnessNoWitnessDiscovered, 0},
+		{"one sink in every context", "Valid", []string{"default", "production"}, nil, StructuralWitnessComplete, 2},
+		{"all sinks in every context", "BothSinks", []string{"default", "production"}, []SymbolIdentity{otherSink}, StructuralWitnessComplete, 4},
+		{"counterexample takes precedence", "Run", []string{"default"}, []SymbolIdentity{missingSink}, StructuralWitnessCounterexample, 1},
+		{"unresolved edge takes precedence", "AlternateBypass", []string{"default"}, nil, StructuralWitnessIndeterminate, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := structuralFixtureRule(tc.entry)
+			rule.Scope.BuildContexts = tc.contexts
+			rule.SinkSymbols = append(rule.SinkSymbols, tc.extraSinks...)
+			report, err := holder.AnalyzeStructuralWitness(rule)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Status != tc.wantStatus || len(report.WitnessedSinks) != tc.wantWitnesses {
+				t.Fatalf("status = %s, witnesses = %d; want %s, %d; report = %#v", report.Status, len(report.WitnessedSinks), tc.wantStatus, tc.wantWitnesses, report)
+			}
+		})
+	}
+}
+
+func TestStructuralWitnessCoverageDiagnosticsAreDeterministic(t *testing.T) {
+	holder := structuralFixtureHolder(t)
+	rule := structuralFixtureRule("SplitCoverage")
+	rule.Scope.BuildContexts = []string{"default", "production"}
+	rule.SinkSymbols = append(rule.SinkSymbols, SymbolIdentity{
+		Repository: "fixture", Language: "go", Package: "example.test/structural/release", Name: "OtherSend", Kind: SymbolFunc,
+	})
+	first, err := holder.AnalyzeStructuralWitness(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gap := range []string{
+		`No witness discovered for declared sink fixture:example.test/structural/release.Sink.Send in build context "default".`,
+		`No witness discovered for declared sink fixture:example.test/structural/release.OtherSend in build context "production".`,
+	} {
+		if !slices.Contains(first.Limitations, gap) {
+			t.Errorf("missing coverage diagnostic %q in %v", gap, first.Limitations)
+		}
+	}
+	if len(first.Limitations) != 3 {
+		t.Fatalf("want two coverage gaps plus the general limitation, got %v", first.Limitations)
+	}
+
+	// Reordering the rule and repeating a context must not change diagnostics
+	// or the canonical report digest, or require duplicate witnesses.
+	slices.Reverse(rule.SinkSymbols)
+	rule.Scope.BuildContexts = []string{"production", "default", "default"}
+	second, err := holder.AnalyzeStructuralWitness(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ReportDigest != second.ReportDigest || second.ReportDigest != StructuralWitnessDigest(second) {
+		t.Fatalf("coverage report digest changed for equivalent rules: %s != %s", first.ReportDigest, second.ReportDigest)
+	}
+	changed := second
+	changed.Limitations = nil
+	if StructuralWitnessDigest(changed) == second.ReportDigest {
+		t.Fatal("report digest did not bind coverage diagnostics")
 	}
 }
 

@@ -12,7 +12,8 @@ That is a code-discovery problem, not just a grep problem.
 repositories. It builds a fast in-memory index from Go ASTs and exposes tools
 that let AI coding agents discover packages, symbols, source ranges, references,
 interfaces, config structs, gRPC services, and cross-repository dependencies
-without reading an entire workspace into context.
+without reading an entire workspace into context. It also compares Git snapshots
+for change-impact review and offers bounded structural enforcement analysis.
 
 The default setup runs as a stdio MCP server. Point it at local Go repositories
 with a small YAML file or the `GOAST_REPOS` environment variable, connect it to
@@ -26,6 +27,11 @@ and reindexing after code changes.
 
 ## Quick Start
 
+Building or installing from source requires Go 1.24 or newer. Each configured
+repository path should point to a Go module root containing `go.mod`; configure
+multiple module roots separately for a monorepo. Git is required for source
+snapshots, impact analysis, structural witnesses, and worktree switching.
+
 Install the command:
 
 ```bash
@@ -38,13 +44,19 @@ Or build from a local checkout:
 make build
 ```
 
-Create a local config file:
+This writes `bin/goast`; use `./bin/goast` in place of `goast` below, or run
+`make install` to install this checkout into `GOBIN` (normally `GOPATH/bin`).
+`@latest` installs the latest published release, which can lag behind this
+checkout's features.
+
+From a local checkout, create a config file:
 
 ```bash
 cp config.example.yaml config.yaml
 ```
 
-Edit `config.yaml` so it points at one or more Go repositories:
+Alternatively, create `config.yaml` directly using the following example.
+Set the paths to one or more local Go modules:
 
 ```yaml
 include_tests: false
@@ -71,6 +83,9 @@ Run the server:
 goast
 ```
 
+In stdio mode, the server waits for MCP input; an MCP client normally launches
+it as a subprocess. Startup logs go to stderr.
+
 For quick one-off use, skip the YAML file and pass repositories directly:
 
 ```bash
@@ -87,18 +102,6 @@ codex mcp add goast \
 claude mcp add goast --scope user --transport stdio \
   --env GOAST_CONFIG=/path/to/config.yaml \
   -- goast
-```
-
-Run the Go test suite:
-
-```bash
-make test
-```
-
-Build the binary:
-
-```bash
-make build
 ```
 
 ## What It Does
@@ -123,6 +126,10 @@ make build
   the MCP client.
 - Reports the published generation, active roots, and captured Git branch/HEAD
   provenance.
+- Compares a Git base revision with the indexed worktree to identify changed
+  declarations, affected callers, and candidate tests.
+- Produces bounded SSA witnesses and counterexamples for declared enforcement
+  rules, with explicit [analysis limitations](#structural-analysis-limits).
 - Serves MCP over stdio or streamable HTTP.
 
 The agent does not need to guess where code lives. It can ask for the package
@@ -142,6 +149,12 @@ context.
 That tradeoff keeps startup fast and makes the server useful in workspaces that
 contain incomplete branches, generated files, service-specific build tags, or
 repositories that are not meant to compile together as one module.
+
+The separate `analyze-structural-witness` tool loads and type-checks packages
+on demand to build SSA (static single assignment form). It requires the `go`
+command on the server's `PATH`, available dependencies, and packages that load
+successfully in each requested context. This stronger requirement applies to
+that tool, not ordinary AST indexing.
 
 MCP gives the index a stable interface for coding agents. Rather than dumping
 large directory trees into a prompt, the agent can call focused tools as it
@@ -163,6 +176,8 @@ AI coding agent
         +-- reference and dependency analysis
         +-- gRPC service discovery
         +-- config-field search
+        +-- Git snapshot and change-impact analysis
+        +-- on-demand structural witnesses (Go packages + SSA)
                 |
                 v
           local Go repositories
@@ -190,16 +205,28 @@ Start with `list-packages`, narrow by repository or internal package, then use
 `search-symbols` to find constructors, handlers, clients, service types, and
 interfaces before reading exact implementations with `read-symbol`.
 
+`search-symbols` uses substring queries, or `exact:Name` for an exact,
+case-sensitive declaration name. Generated `.pb.go` symbols are hidden unless
+`include_generated: true` is supplied; the default result limit is 100.
+Query-free searches return exported declarations only. To find an unexported
+declaration, provide a nonempty query and leave `exported_only` false.
+
 ### Map an Interface
 
 Use `find-implementations` on an interface to find concrete types that satisfy
 it. Use `direction=interfaces` on a concrete type to see which indexed
 interfaces it appears to implement.
 
+This uses AST method-descriptor matching, not a compiler-verified assignability
+check. Confirm semantic compatibility with Go's compiler when it matters.
+
 ### Review API Surface
 
 Use `list-services` to inspect generated gRPC service interfaces and method
-signatures without manually opening protobuf-generated files.
+signatures without manually opening protobuf-generated files. Discovery
+currently recognizes interfaces ending in `ServiceServer` in `.pb.go` files,
+excluding `Unsafe*` stubs; other generated naming conventions are not included
+automatically.
 
 ### Inspect Configuration
 
@@ -217,12 +244,167 @@ statements and each repository's module path.
 
 Use `reindex` after an agent adds, removes, renames, or moves Go symbols. The
 server rebuilds the in-memory index from disk so later source reads and line
-numbers match the edited workspace.
+numbers match the edited workspace. There is no automatic file watcher. A
+reindex also reloads index configuration from YAML/environment; changing the
+transport or listening port requires a server restart.
 
 When the agent moves to another linked Git worktree, pass its absolute root as
 `worktree_root`. A successful selection persists across later argument-free
 reindexes. Use `reset_worktrees: true` to return to the configured roots, and
 use `index-status` whenever the active source tree needs to be proved.
+
+### Review Changes Against a Base Commit
+
+After `reindex`, call `impact-since` with the stable configured repository name
+and a locally resolvable Git revision:
+
+```json
+{
+  "repository": "service-a",
+  "base_commit": "main"
+}
+```
+
+The comparison includes committed changes since the base, uncommitted tracked
+changes, and non-ignored untracked files. It compares the current worktree
+directly with that revision; it does not choose a merge base or fetch remote
+refs. To review a branch against its common ancestor, resolve the desired
+commit with Git first and pass that SHA as `base_commit`.
+
+The result contains `snapshot`, `changed_files`, `changed_symbols`,
+`affected_symbols`, `interfaces`, `config_structs`, `services`,
+`candidate_tests`, `affected_repositories`, and `impact_digest`. Complete
+declaration contents are compared, so body-only edits count. Removed
+declarations remain in `changed_symbols`.
+
+Impact analysis uses the current index's direct references and interface
+relationships, not a transitive whole-program call graph. Deleted declarations
+have no current symbol from which to expand callers. Config classification
+uses struct names containing `config`; service classification uses generated
+interfaces ending in `ServiceServer`. Candidate tests are indexed `Test*`
+functions in affected packages; enable `include_tests` for useful coverage.
+Enable `typed_method_references` in caller repositories for method references.
+Cross-repository dependants are direct importers of the selected repository.
+
+Both analysis tools require a captured Git snapshot and reject source drift
+since publication with an error asking for `reindex`. Keep the worktree stable
+during analysis. Snapshot digests cover the whole Git worktree, including
+non-Go files, even when the configured module is a subdirectory. Git-ignored
+untracked files are outside that snapshot identity.
+
+### Inspect an Enforcement Path
+
+`analyze-structural-witness` checks a caller-supplied `must-pass-through` rule:
+which entry points should reach which sensitive operations through which
+enforcement functions. The rule selects exactly one configured repository;
+other repositories can remain configured on the server.
+
+This example uses the names in
+[`testdata/structural_witness`](testdata/structural_witness). For an isolated
+trial, copy that module to its own Git repository, commit it, and configure its
+root with `name: fixture`. Replace the identities for your own code:
+
+```json
+{
+  "version": 1,
+  "invariant_id": "INV-RELEASE-001",
+  "relation": "must-pass-through",
+  "scope": {
+    "repositories": ["fixture"],
+    "build_contexts": ["default"]
+  },
+  "entry_symbols": [
+    {"repository": "fixture", "language": "go", "package": "example.test/structural/release", "name": "Valid", "kind": "func"}
+  ],
+  "enforcement_symbols": [
+    {"repository": "fixture", "language": "go", "package": "example.test/structural/release", "name": "Authorize", "kind": "func"}
+  ],
+  "sink_symbols": [
+    {"repository": "fixture", "language": "go", "package": "example.test/structural/release", "name": "Sink.Send", "kind": "method"}
+  ],
+  "permit_types": [
+    {"repository": "fixture", "language": "go", "package": "example.test/structural/release", "name": "Permit", "kind": "type"}
+  ],
+  "binding_requirements": ["payload-digest", "destination"],
+  "failure_policy": "fail-closed"
+}
+```
+
+Version `1`, a nonempty invariant ID, relation `must-pass-through`, nonempty
+entry/enforcement/sink/context lists, and `failure_policy: "fail-closed"` are
+required. Every symbol identity, including optional permit types, must include
+`language: "go"`. Methods use `Receiver.Method`; structs and interfaces use
+`kind: "type"`. `permit_types` and `binding_requirements` are optional.
+
+Structural `scope.build_contexts` is a list of strings, separate from the YAML
+build-context objects used for typed references. `default` loads production
+packages in the server's Go environment; `test` or `tests` also loads tests.
+Other strings are passed to Go as `-tags=<value>`, such as `production` or
+`production,purego`. The tool loads `./...` from the active module using Go's
+package selection, independently of AST `exclude_patterns`, `include_tests`,
+and `typed_method_references` settings.
+
+The report provides declared and candidate sinks, witnessed paths,
+counterexamples (`BYPASS`, `IGNORED_ENFORCEMENT`, `BINDING_DRIFT`, `FAILURE_OPEN`),
+unresolved edges, limitations, `rule_digest`, and `report_digest`. Current
+status selection is:
+
+| Status | Meaning in the current implementation |
+| --- | --- |
+| `counterexample` | At least one counterexample was found. |
+| `indeterminate` | No counterexample, but at least one unresolved edge was recorded. |
+| `no-witness-discovered` | Neither of the above, and at least one declared sink lacks a witness in a requested context. |
+| `complete` | Every declared sink has a witness in every requested context, with no recorded counterexample or unresolved edge. |
+
+Missing sink/context pairs are listed in `limitations` and the text response.
+Partial witnesses remain in `witnessed_sinks`; evidence in one context cannot
+satisfy another context's coverage requirement. Missing coverage is not itself
+reported as a bypass counterexample.
+
+Source drift currently returns a tool error, not a report with `status: "stale"`.
+Invalid rules and package-loading failures also return errors.
+
+#### Structural Analysis Limits
+
+Treat this as bounded review evidence. `complete` establishes coverage of the
+declared sinks across requested contexts within the analysis below; it is not
+a whole-program or runtime guarantee.
+
+The traversal follows selected static calls, but enforcement dominance and
+binding checks operate within the function containing a sink. Unmapped
+interface calls are recorded as unresolved; other dynamic calls, reflection,
+goroutines, and deferred calls are not comprehensively modeled. A missing
+unresolved-edge report does not establish that all execution paths were checked.
+
+Binding checks match argument names/types and require the same SSA value at
+enforcement and sink. Supported labels include `payload-digest`, `destination`,
+`classification`, `releasability`, `policy-identity`, and `principal-identity`.
+These checks do not prove cryptographic digest correctness or absence of
+mutation through aliases. `permit_types` is included in the rule digest but
+does not currently enforce permit provenance or one-time use. Candidate egress
+discovery uses operation names such as `Send`, `Publish`, and `Write`; it is
+not an exhaustive inventory of external effects.
+
+### Source Identity and Report Digests
+
+Impact and structural reports include a `snapshot` containing repository,
+HEAD, branch, tracked/untracked/worktree digests, and toolchain identity.
+Impact snapshots also resolve `base_commit`; structural snapshots have no
+comparison base. Symbol identities include `repository`, `language`, `package`,
+`name`, and `kind`.
+
+- `goast_generation` is the process-local numeric index generation, starting
+  at 1 and increasing after successful reindexes.
+- `structural_provider` is `"goast"`.
+- `structural_generation` is a 64-character hexadecimal digest derived from
+  the numeric generation, toolchain identity, and worktree digest.
+- `impact_digest` and `report_digest` hash normalized report data with their
+  own digest field cleared. `rule_digest` covers the normalized structural rule.
+
+Use the returned digests as opaque identifiers. Reproducing them requires the
+exact serialization contract, including field order and empty/null arrays;
+arbitrarily re-encoding JSON can change the hash. They identify analysis inputs
+and results, not a signature or a proof of analysis completeness.
 
 ## Tool Surface
 
@@ -243,7 +425,7 @@ The MCP server registers these tools:
 - `reindex`: rebuild the index, optionally selecting or resetting a live Git
   worktree override.
 - `index-status`: report the published generation, active roots, counts, and
-  captured Git source provenance, including worktree digests.
+  captured Git source provenance, including the combined worktree digest.
 - `impact-since`: compare one current indexed Git worktree with a resolved base
   commit and return changed declarations, callers, implicit interfaces,
   configuration types, generated services, candidate tests, cross-repository
@@ -258,13 +440,8 @@ The MCP server registers these tools:
 The tools are intentionally small and composable. A coding agent can combine
 them during a refactor instead of relying on one large, lossy codebase summary.
 
-Structural analysis requires exactly one configured repository plus frozen
-entry, enforcement, sink, build-context, binding, permit-type, and fail-closed
-policy mappings. It returns `complete` only when every declared sink is
-witnessed in every requested context with no counterexample or unresolved edge.
-`counterexample`, `no-witness-discovered`, `indeterminate`, and `stale` are
-explicit non-passing outcomes; the absence of a discovered witness is not
-reported as proof of a bypass.
+See [Inspect an Enforcement Path](#inspect-an-enforcement-path) for the rule
+format, status meanings, and current analysis limits.
 
 ## Configuration
 
@@ -273,6 +450,12 @@ Configuration is loaded in this order:
 1. `GOAST_CONFIG`
 2. `GOAST_REPOS`
 3. `config.yaml` in the working directory
+
+The first selected source is used without merging the others. An invalid
+`GOAST_CONFIG` file fails loading instead of falling back to `GOAST_REPOS`.
+Use absolute repository and config paths for client-launched processes;
+relative repository paths resolve from the server's working directory, not
+the YAML file's directory.
 
 `GOAST_CONFIG` points at a YAML file:
 
@@ -334,8 +517,9 @@ Exclude patterns are applied even when test indexing is enabled. Consequently,
 an explicit `**/*_test.go` pattern excludes test files from every opted-in
 repository. Patterns use slash-separated path segments; `**` matches zero or
 more directories, while a pattern without a slash is matched against every
-file basename. If `exclude_patterns` is omitted, the defaults are `vendor/**`
-and `testdata/**`.
+file basename. If `exclude_patterns` is omitted or empty, the defaults are
+`vendor/**` and `testdata/**`. Directories named `vendor`, `testdata`, or `.git`
+are always skipped by AST indexing, regardless of custom patterns.
 
 Typed method references are also opt-in because retaining and type-checking
 package syntax has a real startup and peak-memory cost in large fleets. The
@@ -359,8 +543,12 @@ build_contexts:
     build_tags: [purego]
 ```
 
-Build and tool tags are normalized and invalid contexts fail indexing instead
-of silently producing an empty graph. When an explicit target differs from the
+These contexts filter typed method selections, not the base AST symbol list,
+which can include declarations from mutually exclusive build variants.
+
+When typed references are enabled, build and tool tags are normalized and
+invalid contexts fail indexing instead of silently producing an empty graph.
+When an explicit target differs from the
 host and `cgo_enabled` is omitted, it defaults to `false`. Host tool tags are
 preserved when GOARCH is unchanged; when GOARCH changes they are cleared unless
 `tool_tags` is supplied. Standard-library imports and type sizes come from the
@@ -375,7 +563,7 @@ repository after a worktree switch.
 ### Live Git Worktree Switching
 
 GoAST can switch a running MCP server to another registered worktree of a
-configured Git repository:
+configured Git repository by passing these arguments to `reindex`:
 
 ```json
 {
@@ -394,13 +582,15 @@ The override belongs to one running GoAST process and persists across ordinary
 `reindex` calls. Separate stdio GoAST processes can therefore work on different
 worktrees concurrently. HTTP clients connected to the same server share its
 single process-local selection and must coordinate changes. Return to the
-YAML/environment roots with:
+YAML/environment roots by calling `reindex` with:
 
 ```json
 {
   "reset_worktrees": true
 }
 ```
+
+`worktree_root` and `reset_worktrees: true` are mutually exclusive.
 
 Validation, configuration loading, indexing, and selected-worktree provenance
 verification complete before publication. The selected branch and HEAD must
@@ -414,12 +604,13 @@ override, the reindex fails until `reset_worktrees` explicitly clears it.
 
 `index-status` reports configured and active module paths, logical repository
 names, symbol/package counts, generation, branch/HEAD selection provenance, and
-tracked, untracked, and combined worktree digests.
+the combined worktree digest. The separate tracked and untracked digests are
+included in the analysis tools' structured snapshots.
 Override provenance comes from the selection verified for that published
 generation; Git metadata for ordinary configured roots is best-effort. HEAD
 identifies the selected Git revision; the worktree digests additionally bind
-uncommitted tracked changes and non-ignored untracked content. Live switching requires the
-`git` executable at runtime with support for
+uncommitted tracked changes and non-ignored untracked content. Live switching
+requires the `git` executable at runtime with support for
 `git worktree list --porcelain -z`. Ordinary indexing of configured non-Git
 source directories remains supported when no worktree override is requested.
 
@@ -437,6 +628,9 @@ binary in the client config. With the default Go layout, that is usually:
 ```bash
 $(go env GOPATH)/bin/goast
 ```
+
+If `go env GOBIN` is nonempty, use that directory instead. For a local build,
+use the absolute path to `bin/goast` in the checkout.
 
 ### Codex
 
@@ -468,6 +662,9 @@ Remove an older registration before adding a replacement:
 codex mcp remove goast
 ```
 
+See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp)
+for client configuration details.
+
 ### Claude Code
 
 Register `goast` as a user-scoped Claude Code stdio MCP server:
@@ -498,6 +695,9 @@ Remove an older registration before adding a replacement:
 claude mcp remove goast --scope user
 ```
 
+See the [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp)
+for client configuration details.
+
 ### Claude Desktop
 
 Add the server to the Claude Desktop config:
@@ -526,11 +726,18 @@ transport: http
 port: 7400
 ```
 
-The HTTP server exposes MCP at:
+Clients can connect locally at:
 
 ```text
 http://127.0.0.1:7400/mcp
 ```
+
+The listener binds `:7400` on all interfaces, not just loopback. The MCP handler
+is mounted directly, so `/mcp` is a usable client URL rather than an exclusive
+route. GoAST configures no authentication or TLS; restrict network access or
+provide those controls through a reverse proxy when sharing the server. Every
+client of that process shares its configured repositories and worktree
+selection. The `port` setting is unused in stdio mode.
 
 ## What You Can Build With It
 
@@ -562,6 +769,8 @@ settings.
 An integration needs:
 
 - Local filesystem access to the Go repositories that should be indexed.
+- A readable `go.mod` at each configured module root. Ordinary indexing logs
+  and skips modules whose `go.mod` cannot be read, so check startup counts.
 - A `config.yaml`, `GOAST_CONFIG`, or `GOAST_REPOS` value.
 - An MCP client that can run a stdio command or connect to streamable HTTP.
 - A policy decision about which repositories and generated files should be in
@@ -574,6 +783,8 @@ An integration needs:
 - For live worktree switching, a local `git` executable supporting
   `git worktree list --porcelain -z` and registered linked worktrees belonging
   to configured repositories.
+- For structural witnesses, a working `go` command, resolvable dependencies,
+  and packages that type-check in the requested contexts.
 
 No repository needs to compile as part of startup. `goast` parses source files
 and builds its structural index from Go ASTs. Opted-in repositories retain only
@@ -593,8 +804,9 @@ resolved because source is incomplete, ill-typed, excluded, or unavailable is
 omitted rather than guessed.
 
 It is not a security scanner, compliance engine, build system, or generic
-full-text search service. It is a focused MCP server for structured Go code
-discovery.
+full-text search service. Structural witnesses supplement review with bounded
+static evidence; they do not establish runtime enforcement or whole-program
+security. See [Structural Analysis Limits](#structural-analysis-limits).
 
 ## Main Files
 
@@ -607,6 +819,8 @@ discovery.
 - [`internal/server`](internal/server): MCP server construction and tool
   registration.
 - [`internal/tools`](internal/tools): MCP tool handlers.
+- [`docs/architecture.md`](docs/architecture.md): index internals and analysis
+  design.
 - [`testdata/sample_repo`](testdata/sample_repo): sample repository used by
   tests.
 - [`config.example.yaml`](config.example.yaml): starter config file.
@@ -631,6 +845,10 @@ Build the command:
 make build
 ```
 
+`make build` and `make install` embed a version from `git describe`; use
+`make build VERSION=vX.Y.Z` to set it explicitly. The version is advertised
+in MCP initialization and startup logs; there is no `--version` CLI flag.
+
 Run the optional integration test against a real local Go repository:
 
 ```bash
@@ -642,3 +860,9 @@ Set `GOAST_INTEGRATION_INCLUDE_TESTS=1` to exercise test indexing and
 require a specific reference target, also set
 `GOAST_INTEGRATION_REFERENCE_PACKAGE` and
 `GOAST_INTEGRATION_REFERENCE_NAME` (methods use `Receiver.Method`).
+
+For the structural integration check, set `GOAST_INTEGRATION_STRUCTURAL_RULE`
+to a JSON rule in the format above; its repository name must match the
+configured name (the module directory's basename in this test harness).
+`GOAST_INTEGRATION_EXPECT_STATUS` optionally asserts a specific result status.
+Tests requiring these environment variables are skipped when they are absent.

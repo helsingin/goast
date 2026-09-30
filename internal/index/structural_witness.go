@@ -151,19 +151,44 @@ func (h *IndexHolder) AnalyzeStructuralWitness(rule StructuralWitnessRule) (Stru
 		report.Counterexamples = append(report.Counterexamples, analysis.counterexamples...)
 		report.UnresolvedEdges = append(report.UnresolvedEdges, analysis.unresolved...)
 	}
+	coverageGaps := structuralWitnessCoverageGaps(report, rule.Scope.BuildContexts)
+	report.Limitations = append(report.Limitations, coverageGaps...)
 	normalizeStructuralReport(&report)
 	switch {
 	case len(report.Counterexamples) > 0:
 		report.Status = StructuralWitnessCounterexample
 	case len(report.UnresolvedEdges) > 0:
 		report.Status = StructuralWitnessIndeterminate
-	case len(report.WitnessedSinks) == 0:
+	case len(coverageGaps) > 0:
 		report.Status = StructuralWitnessNoWitnessDiscovered
 	default:
 		report.Status = StructuralWitnessComplete
 	}
 	report.ReportDigest = StructuralWitnessDigest(report)
 	return report, nil
+}
+
+// Coverage is required for every declared sink/context pair. Witnesses from
+// another context or for another sink cannot satisfy a missing pair.
+func structuralWitnessCoverageGaps(report StructuralWitnessReport, buildContexts []string) []string {
+	type coverageKey struct {
+		context string
+		sink    string
+	}
+	witnessed := make(map[coverageKey]bool, len(report.WitnessedSinks))
+	for _, witness := range report.WitnessedSinks {
+		witnessed[coverageKey{witness.BuildContext, structuralSymbolKey(witness.Sink)}] = true
+	}
+	var gaps []string
+	sinks := uniqueStructuralSymbols(cloneSymbolIdentities(report.DeclaredSinks))
+	for _, buildContext := range uniqueSortedStructuralStrings(buildContexts) {
+		for _, sink := range sinks {
+			if !witnessed[coverageKey{buildContext, structuralSymbolKey(sink)}] {
+				gaps = append(gaps, fmt.Sprintf("No witness discovered for declared sink %s in build context %q.", structuralSymbolDisplay(sink), buildContext))
+			}
+		}
+	}
+	return gaps
 }
 
 type structuralContextAnalysis struct {
