@@ -1,15 +1,17 @@
 # goast
 
-GoAST helps a solo architect-builder and a coding agent increase **the size of
-a system one person can change confidently**.
+GoAST helps engineers and teams working with coding agents **make confident
+changes across large Go systems**.
 
-A coding agent makes implementation faster. Your bottleneck becomes directing
-it: finding the right code, explaining relationships, checking consequences,
-and catching locally correct changes that violate the larger design. GoAST
-reduces that coordination work by giving the agent a queryable map of your Go
-workspace and tools for reviewing changes against architectural intent.
+A coding agent makes implementation faster. Getting a change ready to ship
+still means finding the right code, explaining relationships, checking
+consequences, and catching locally correct changes that violate the larger
+design. GoAST reduces that coordination work by giving coding agents a
+queryable map of your Go workspace and tools for reviewing changes against
+architectural intent.
 
-For a solo builder, that means:
+Whether you are building independently or collaborating across a team, that
+means:
 
 - **Larger changes per working session.** An interface change spanning several
   packages or services becomes easier to trace, delegate to the agent, and
@@ -19,21 +21,24 @@ For a solo builder, that means:
 - **More viable maintenance work.** Config consolidation, implementation
   consistency, dependency cleanup, and test discovery become cheaper to
   investigate.
-- **Faster return to dormant projects.** You can reconstruct the relevant
-  architecture from the code instead of rebuilding all that context from
-  memory.
+- **Faster onboarding and reorientation.** New contributors and returning
+  maintainers can trace the relevant architecture directly from indexed source.
+- **Easier reviews and handoffs.** Authors and reviewers can inspect the same
+  declarations, dependencies, and source-bound analysis results when discussing
+  a change.
 - **More attention available for design.** You can spend a larger share of your
   time deciding what the system should do and assessing tradeoffs.
 
 For example, changing an authorization interface across three services involves
 substantial reconnaissance and follow-through. With GoAST, the agent can locate
 implementations and callers, make coordinated edits, refresh the index, inspect
-the reported impact, and check declared enforcement paths. You still own the
-design and acceptance criteria, but less of your day goes into navigating the
+the reported impact, and check declared enforcement paths. The engineers
+responsible for each service can use that evidence to review the change against
+their design and acceptance criteria, with less time spent reconstructing its
 consequences.
 
 The intended productivity gain is **more completed, coherent changes per unit
-of your attention**. These are workflow benefits, not a benchmarked speedup:
+of engineering attention**. These are workflow benefits, not a benchmarked speedup:
 the benefit will depend on workspace size, familiarity, and how often changes
 cross package or repository boundaries. Impact analysis and structural
 witnesses provide bounded evidence; they support your review and judgment.
