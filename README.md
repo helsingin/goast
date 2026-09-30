@@ -1,12 +1,42 @@
 # goast
 
-Large Go workspaces are hard for AI agents to inspect once they grow beyond a
-few packages. Real systems usually have internal packages, generated protobuf
-code, service interfaces, implicit interface implementations, shared config
-types, and cross-repository imports that are difficult to understand from raw
-file search alone.
+GoAST helps a solo architect-builder and a coding agent increase **the size of
+a system one person can change confidently**.
 
-That is a code-discovery problem, not just a grep problem.
+A coding agent makes implementation faster. Your bottleneck becomes directing
+it: finding the right code, explaining relationships, checking consequences,
+and catching locally correct changes that violate the larger design. GoAST
+reduces that coordination work by giving the agent a queryable map of your Go
+workspace and tools for reviewing changes against architectural intent.
+
+For a solo builder, that means:
+
+- **Larger changes per working session.** An interface change spanning several
+  packages or services becomes easier to trace, delegate to the agent, and
+  review.
+- **Less preparation for each task.** You spend less time assembling file lists
+  and explaining where things live. The agent can query the system itself.
+- **More viable maintenance work.** Config consolidation, implementation
+  consistency, dependency cleanup, and test discovery become cheaper to
+  investigate.
+- **Faster return to dormant projects.** You can reconstruct the relevant
+  architecture from the code instead of rebuilding all that context from
+  memory.
+- **More attention available for design.** You can spend a larger share of your
+  time deciding what the system should do and assessing tradeoffs.
+
+For example, changing an authorization interface across three services involves
+substantial reconnaissance and follow-through. With GoAST, the agent can locate
+implementations and callers, make coordinated edits, refresh the index, inspect
+the reported impact, and check declared enforcement paths. You still own the
+design and acceptance criteria, but less of your day goes into navigating the
+consequences.
+
+The intended productivity gain is **more completed, coherent changes per unit
+of your attention**. These are workflow benefits, not a benchmarked speedup:
+the benefit will depend on workspace size, familiarity, and how often changes
+cross package or repository boundaries. Impact analysis and structural
+witnesses provide bounded evidence; they support your review and judgment.
 
 `goast` is a Go MCP server for indexing Go source across one or more
 repositories. It builds a fast in-memory index from Go ASTs and exposes tools
