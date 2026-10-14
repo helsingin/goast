@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 )
@@ -56,9 +57,9 @@ type IndexStatus struct {
 	Worktrees    []WorktreeStatus
 }
 
-// ReindexResult is returned only after a replacement index has been built and
-// atomically published.
+// ReindexResult describes a published replacement or a verified unchanged index.
 type ReindexResult struct {
+	Reused   bool
 	Symbols  int
 	Packages int
 	Status   IndexStatus
@@ -79,6 +80,7 @@ type IndexHolder struct {
 	loadConfig    ConfigLoader
 	overrides     map[string]WorktreeStatus // canonical Git common dir -> captured provenance
 	generation    uint64
+	inputDigest   string
 }
 
 // NewHolder creates an IndexHolder around an index already built from cfg.
@@ -98,6 +100,7 @@ func buildHolderWith(cfg IndexConfig, build func(IndexConfig) (*Index, error)) (
 	configured := freezeRepoNames(cfg)
 	active := cloneIndexConfig(configured)
 	before := captureRepositoryStatus(configured, active, nil, nil)
+	beforeInputs, _ := captureIndexInputs(active)
 	idx, err := build(active)
 	if err != nil {
 		return nil, err
@@ -106,7 +109,15 @@ func buildHolderWith(cfg IndexConfig, build func(IndexConfig) (*Index, error)) (
 	if err := validateRepositorySourceStability(before, after); err != nil {
 		return nil, err
 	}
-	return newHolder(idx, configured, active, after), nil
+	afterInputs, _ := captureIndexInputs(active)
+	if beforeInputs != "" && afterInputs != "" && beforeInputs != afterInputs {
+		return nil, fmt.Errorf("index inputs changed while its index was being built; reindex again")
+	}
+	holder := newHolder(idx, configured, active, after)
+	if beforeInputs == afterInputs {
+		holder.inputDigest = afterInputs
+	}
+	return holder, nil
 }
 
 func newHolder(idx *Index, configured, active IndexConfig, repositories []RepositoryStatus) *IndexHolder {
@@ -143,7 +154,7 @@ func (h *IndexHolder) Status() IndexStatus {
 	return makeIndexStatus(h.generation, len(h.idx.Symbols), len(h.idx.Packages), h.repositories, h.overrides)
 }
 
-// Reindex rebuilds from the active roots and preserves any process-local
+// Reindex refreshes from the active roots and preserves any process-local
 // worktree overrides selected by an earlier ReindexWithOptions call.
 func (h *IndexHolder) Reindex() (symbols int, packages int, err error) {
 	result, err := h.ReindexWithOptions(ReindexOptions{})
@@ -154,7 +165,7 @@ func (h *IndexHolder) Reindex() (symbols int, packages int, err error) {
 }
 
 // ReindexWithOptions reloads configuration, applies a validated worktree
-// selection, builds a complete replacement index, and then publishes the
+// selection, reuses a verified unchanged index or builds a replacement, and publishes the
 // index, roots, override state, and generation in one critical section.
 // Every failure leaves the previous generation byte-for-byte authoritative.
 func (h *IndexHolder) ReindexWithOptions(options ReindexOptions) (ReindexResult, error) {
@@ -202,6 +213,17 @@ func (h *IndexHolder) ReindexWithOptions(options ReindexOptions) (ReindexResult,
 		return ReindexResult{}, err
 	}
 	beforeRepositories := captureRepositoryStatus(configured, active, refreshedOverrides, repositoryOverrides)
+	beforeInputs, _ := captureIndexInputs(active)
+	h.mu.RLock()
+	unchanged := beforeInputs != "" && beforeInputs == h.inputDigest &&
+		reflect.DeepEqual(configured, h.configuredCfg) && reflect.DeepEqual(active, h.activeCfg) &&
+		reflect.DeepEqual(beforeRepositories, h.repositories) && reflect.DeepEqual(refreshedOverrides, h.overrides)
+	if unchanged {
+		status := makeIndexStatus(h.generation, len(h.idx.Symbols), len(h.idx.Packages), h.repositories, h.overrides)
+		h.mu.RUnlock()
+		return ReindexResult{Symbols: status.Symbols, Packages: status.Packages, Status: status, Reused: true}, nil
+	}
+	h.mu.RUnlock()
 
 	newIdx, err := buildIndex(active)
 	if err != nil {
@@ -215,6 +237,10 @@ func (h *IndexHolder) ReindexWithOptions(options ReindexOptions) (ReindexResult,
 	if err := validateRepositorySourceStability(beforeRepositories, repositories); err != nil {
 		return ReindexResult{}, err
 	}
+	afterInputs, _ := captureIndexInputs(active)
+	if beforeInputs != "" && afterInputs != "" && beforeInputs != afterInputs {
+		return ReindexResult{}, fmt.Errorf("index inputs changed while its index was being built; reindex again")
+	}
 
 	h.mu.Lock()
 	h.idx = newIdx
@@ -223,6 +249,10 @@ func (h *IndexHolder) ReindexWithOptions(options ReindexOptions) (ReindexResult,
 	h.repositories = append([]RepositoryStatus(nil), repositories...)
 	h.overrides = cloneWorktreeOverrides(refreshedOverrides)
 	h.generation++
+	h.inputDigest = ""
+	if beforeInputs == afterInputs {
+		h.inputDigest = afterInputs
+	}
 	status := makeIndexStatus(h.generation, len(newIdx.Symbols), len(newIdx.Packages), h.repositories, h.overrides)
 	h.mu.Unlock()
 

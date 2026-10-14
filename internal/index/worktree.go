@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 type gitLocation struct {
@@ -241,43 +243,54 @@ func captureRepositoryStatus(
 	repositoryOverrides map[int]string,
 ) []RepositoryStatus {
 	status := make([]RepositoryStatus, len(configured.Repos))
+	// Git inspection is independent per repository. Bound subprocess concurrency
+	// to the available Go scheduler parallelism instead of serializing all roots.
+	workers := make(chan struct{}, max(1, runtime.GOMAXPROCS(0)))
+	var pending sync.WaitGroup
 	for i, repo := range configured.Repos {
-		activePath := ""
-		if i < len(active.Repos) {
-			activePath = active.Repos[i].Path
-		}
-		entry := RepositoryStatus{
-			Name:                  repoConfigName(repo),
-			ConfiguredPath:        repo.Path,
-			ActivePath:            activePath,
-			IncludeTests:          repo.IncludeTests,
-			TypedMethodReferences: repo.TypedMethodReferences,
-		}
-		if commonDir, ok := repositoryOverrides[i]; ok {
-			if worktree, exists := overrides[commonDir]; exists {
-				entry.GitRoot = worktree.Root
-				entry.GitCommonDir = worktree.CommonDir
-				entry.Branch = worktree.Branch
-				entry.Head = worktree.Head
-				entry.WorktreeOverride = true
-				populateRepositorySourceIdentity(&entry)
-				status[i] = entry
-				continue
+		workers <- struct{}{}
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			defer func() { <-workers }()
+			activePath := ""
+			if i < len(active.Repos) {
+				activePath = active.Repos[i].Path
 			}
-		}
-		location, err := inspectGitLocation(activePath)
-		if err == nil {
-			worktree, worktreeErr := inspectWorktreeRoot(location.Root)
-			if worktreeErr == nil {
-				entry.GitRoot = worktree.Root
-				entry.GitCommonDir = worktree.CommonDir
-				entry.Branch = worktree.Branch
-				entry.Head = worktree.Head
+			entry := RepositoryStatus{
+				Name:                  repoConfigName(repo),
+				ConfiguredPath:        repo.Path,
+				ActivePath:            activePath,
+				IncludeTests:          repo.IncludeTests,
+				TypedMethodReferences: repo.TypedMethodReferences,
 			}
-		}
-		populateRepositorySourceIdentity(&entry)
-		status[i] = entry
+			if commonDir, ok := repositoryOverrides[i]; ok {
+				if worktree, exists := overrides[commonDir]; exists {
+					entry.GitRoot = worktree.Root
+					entry.GitCommonDir = worktree.CommonDir
+					entry.Branch = worktree.Branch
+					entry.Head = worktree.Head
+					entry.WorktreeOverride = true
+					populateRepositorySourceIdentity(&entry)
+					status[i] = entry
+					return
+				}
+			}
+			location, err := inspectGitLocation(activePath)
+			if err == nil {
+				worktree, worktreeErr := inspectWorktreeRoot(location.Root)
+				if worktreeErr == nil {
+					entry.GitRoot = worktree.Root
+					entry.GitCommonDir = worktree.CommonDir
+					entry.Branch = worktree.Branch
+					entry.Head = worktree.Head
+				}
+			}
+			populateRepositorySourceIdentity(&entry)
+			status[i] = entry
+		}()
 	}
+	pending.Wait()
 	return status
 }
 

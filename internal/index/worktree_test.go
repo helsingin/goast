@@ -279,21 +279,21 @@ func TestIndexHolderSwitchesWorktreesRoundTrip(t *testing.T) {
 		t.Fatalf("argument-free counts: got %d symbols/%d packages, want 2/2", symbols, packages)
 	}
 	assertVariant(t, holder.Get(), fixture.linked, "B")
-	assertPublishedRepository(t, holder.Status(), 3, fixture, fixture.linked, fixture.linkedBranch, fixture.linkedHead, true)
+	assertPublishedRepository(t, holder.Status(), 2, fixture, fixture.linked, fixture.linkedBranch, fixture.linkedHead, true)
 
 	toPrimary, err := holder.ReindexWithOptions(ReindexOptions{WorktreeRoot: fixture.primary})
 	if err != nil {
 		t.Fatalf("switch back to primary worktree: %v", err)
 	}
 	assertVariant(t, holder.Get(), fixture.primary, "A")
-	assertPublishedRepository(t, toPrimary.Status, 4, fixture, fixture.primary, fixture.primaryBranch, fixture.primaryHead, true)
+	assertPublishedRepository(t, toPrimary.Status, 3, fixture, fixture.primary, fixture.primaryBranch, fixture.primaryHead, true)
 
 	reset, err := holder.ReindexWithOptions(ReindexOptions{ResetWorktrees: true})
 	if err != nil {
 		t.Fatalf("reset worktrees: %v", err)
 	}
 	assertVariant(t, holder.Get(), fixture.primary, "A")
-	assertPublishedRepository(t, reset.Status, 5, fixture, fixture.primary, fixture.primaryBranch, fixture.primaryHead, false)
+	assertPublishedRepository(t, reset.Status, 4, fixture, fixture.primary, fixture.primaryBranch, fixture.primaryHead, false)
 }
 
 func TestIndexHolderFreezesFallbackRepositoryNameAcrossWorktrees(t *testing.T) {

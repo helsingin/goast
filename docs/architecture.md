@@ -130,6 +130,23 @@ The initial index is built at startup. During an agent session, source can
 change. The `reindex` tool rebuilds the index from disk and swaps it into the
 server through `IndexHolder`.
 
+Before rebuilding, the holder compares the effective configuration, worktree
+selection, captured Git provenance, and a content digest against the published
+generation. An exact match retains the index pointer and generation and reports
+`unchanged=true`. The digest walks source files independently of Git, including
+ignored Go files and same-size edits with preserved timestamps. Typed reference
+indexing additionally validates Go source/export-archive search trees under the
+configured roots, GOROOT, and GOPATH. Read-only, offline Go queries resolve the
+server working directory's external import module graph; its module sources
+are also validated without scanning the entire module cache. Missing or unreadable roots and
+external dependency directory symlinks conservatively disable reuse. Configured
+source walks ignore directory symlinks, matching `BuildIndex`. Source fingerprints are captured before
+and after builds; detected drift prevents publication. `NewHolder`, which wraps
+an already-built index without observing its build, enables reuse only after
+its first verified rebuild. Production startup uses `BuildHolder` and can reuse
+the initial generation immediately. Independent Git provenance checks run with
+concurrency bounded by `GOMAXPROCS`.
+
 Tool handlers always read the current index from the holder, so they see the
 new index immediately after `reindex` completes.
 

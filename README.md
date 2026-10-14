@@ -278,8 +278,12 @@ statements and each repository's module path.
 ### Refresh After Edits
 
 Use `reindex` after an agent adds, removes, renames, or moves Go symbols. The
-server rebuilds the in-memory index from disk so later source reads and line
-numbers match the edited workspace. There is no automatic file watcher. A
+server checks configuration, active roots, Git provenance, and source contents.
+Unchanged requests reuse the existing index without parsing or type checking,
+preserve its generation, and report `unchanged=true`. Concurrent requests are
+serialized, so queued requests also reuse a completed refresh. Changed inputs
+rebuild the in-memory index so later source reads and line numbers match the
+edited workspace. There is no automatic file watcher. A
 reindex also reloads index configuration from YAML/environment; changing the
 transport or listening port requires a server restart.
 
@@ -429,7 +433,7 @@ comparison base. Symbol identities include `repository`, `language`, `package`,
 `name`, and `kind`.
 
 - `goast_generation` is the process-local numeric index generation, starting
-  at 1 and increasing after successful reindexes.
+  at 1 and increasing after successful rebuilds; unchanged reindexes retain it.
 - `structural_provider` is `"goast"`.
 - `structural_generation` is a 64-character hexadecimal digest derived from
   the numeric generation, toolchain identity, and worktree digest.

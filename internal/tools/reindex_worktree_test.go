@@ -156,6 +156,9 @@ func TestReindexWorktreeRoundTripAndProvenance(t *testing.T) {
 	if strings.Contains(persisted, "\nRepositories:\n") {
 		t.Fatalf("routine reindex emitted the full repository inventory:\n%s", persisted)
 	}
+	if !strings.Contains(persisted, "unchanged=true") || !strings.Contains(persisted, "generation=2;") {
+		t.Fatalf("unchanged worktree was rebuilt:\n%s", persisted)
+	}
 	_, persistedStatus := callWorktreeTool(t, session, "index-status", nil)
 	if !strings.Contains(persistedStatus, "active="+fixture.feature) || !strings.Contains(persistedStatus, "worktree_override=true") {
 		t.Fatalf("index-status did not retain selected worktree:\n%s", persistedStatus)

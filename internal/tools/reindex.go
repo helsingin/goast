@@ -20,7 +20,7 @@ type ReindexArgs struct {
 func RegisterReindex(server *mcp.Server, holder *index.IndexHolder) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "reindex",
-		Description: "Re-scan all repositories and atomically rebuild the symbol index. Pass worktree_root to switch this live server process to a registered worktree of a configured Git repository without restarting the MCP client; the selection persists across later argument-free reindexes. Pass reset_worktrees to return to configured roots. Call after source edits so declarations, references, and line numbers stay current.",
+		Description: "Refresh the symbol index after source edits. Unchanged inputs reuse the published index without parsing or type checking and preserve its generation; repeated unchanged calls are cheap. Pass worktree_root to switch this live server process to a registered worktree of a configured Git repository without restarting the MCP client; the selection persists across later argument-free reindexes. Pass reset_worktrees to return to configured roots.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args ReindexArgs) (*mcp.CallToolResult, any, error) {
 		start := time.Now()
 		result, err := holder.ReindexWithOptions(index.ReindexOptions{
@@ -45,6 +45,9 @@ func RegisterReindex(server *mcp.Server, holder *index.IndexHolder) {
 			result.Status.Generation,
 			len(result.Status.Worktrees),
 		)
+		if result.Reused {
+			text += "; unchanged=true; reused existing index (no rebuild)"
+		}
 		if args.WorktreeRoot != "" {
 			if selected, ok := findSelectedWorktree(result.Status, args.WorktreeRoot); ok {
 				text += fmt.Sprintf(
