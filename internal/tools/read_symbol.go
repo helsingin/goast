@@ -3,9 +3,11 @@ package tools
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/helsingin/goast/internal/index"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -16,13 +18,16 @@ type ReadSymbolArgs struct {
 	Package        string `json:"package" jsonschema:"required,Full import path of the package (e.g. github.com/acme/platform/auth)"`
 	Name           string `json:"name" jsonschema:"required,Symbol name. For methods use Type.Method format (e.g. KeyManager.GetKey)"`
 	IncludeImports bool   `json:"include_imports,omitempty" jsonschema:"Also include the file's import block"`
+	Offset         int    `json:"offset,omitempty" jsonschema:"Byte offset from a previous next_offset; defaults to 0. Keep package, name and include_imports unchanged when continuing."`
+	MaxBytes       int    `json:"max_bytes,omitempty" jsonschema:"Maximum UTF-8 bytes per reply including pagination metadata; defaults to 16384, range 1024 through 131072."`
+	ExpectedDigest string `json:"expected_digest,omitempty" jsonschema:"Source SHA-256 from the previous page; required when offset is greater than 0. Refuses source changes between pages."`
 }
 
 // RegisterReadSymbol registers the read-symbol tool on the server.
 func RegisterReadSymbol(server *mcp.Server, holder *index.IndexHolder) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "read-symbol",
-		Description: "Read the full source code of a specific Go symbol. Use search-symbols first to find the symbol's package and name, then read-symbol to see its implementation. If you've made code changes recently, call reindex first so line numbers are accurate.",
+		Description: "Read source code of a specific Go symbol. Replies are bounded to 16 KiB by default. Large symbols return next_offset and source_digest: continue with offset and expected_digest until next_offset=none before treating the source as complete. Use search-symbols first to find the package and name. After code changes, call reindex first so line numbers are accurate.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args ReadSymbolArgs) (*mcp.CallToolResult, any, error) {
 		sym := holder.Get().GetSymbol(args.Package, args.Name)
 		if sym == nil {
@@ -64,12 +69,64 @@ func RegisterReadSymbol(server *mcp.Server, holder *index.IndexHolder) {
 		}
 		b.WriteString(source)
 
+		text, err := pageSymbolSource(b.String(), args)
+		if err != nil {
+			return nil, nil, err
+		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				&mcp.TextContent{Text: b.String()},
+				&mcp.TextContent{Text: text},
 			},
 		}, nil, nil
 	})
+}
+
+// pageSymbolSource pages the existing rendered source without omitting imports,
+// comments or code. Offsets address that exact UTF-8 text, not the page headers.
+func pageSymbolSource(source string, args ReadSymbolArgs) (string, error) {
+	limit := args.MaxBytes
+	if limit == 0 {
+		limit = 16384
+	}
+	if limit < 1024 || limit > 131072 {
+		return "", fmt.Errorf("max_bytes must be between 1024 and 131072")
+	}
+	if args.Offset < 0 || args.Offset > len(source) {
+		return "", fmt.Errorf("offset is outside the source; start again at offset 0")
+	}
+	if !utf8.ValidString(source) || (args.Offset < len(source) && !utf8.RuneStart(source[args.Offset])) {
+		return "", fmt.Errorf("source or offset is not valid UTF-8")
+	}
+	if args.Offset > 0 && args.ExpectedDigest == "" {
+		return "", fmt.Errorf("expected_digest is required when continuing source pages")
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(source)))
+	if args.ExpectedDigest != "" && args.ExpectedDigest != digest {
+		return "", fmt.Errorf("source changed between pages; reindex and start again at offset 0 without expected_digest")
+	}
+	// Preserve the original small-symbol response exactly.
+	if args.Offset == 0 && len(source) <= limit {
+		return source, nil
+	}
+	// Reserve ample room for fixed metadata and 64-bit offsets. This bound
+	// includes the header, not just the source body.
+	end := args.Offset + min(limit-512, len(source)-args.Offset)
+	if end < len(source) {
+		for end > args.Offset && !utf8.RuneStart(source[end]) {
+			end--
+		}
+		if newline := strings.LastIndexByte(source[args.Offset:end], '\n'); newline >= 0 {
+			end = args.Offset + newline + 1
+		}
+	}
+	next := "none"
+	continuation := "// Complete: no more source pages.\n"
+	if end < len(source) {
+		next = fmt.Sprint(end)
+		continuation = "// Continue read-symbol with offset=next_offset and expected_digest=source_digest; keep package, name and include_imports unchanged.\n"
+	}
+	header := fmt.Sprintf("// Source page: offset=%d next_offset=%s total_bytes=%d source_digest=%s\n%s\n", args.Offset, next, len(source), digest, continuation)
+	return header + source[args.Offset:end], nil
 }
 
 // readSourceLines reads lines [start, end] (1-indexed, inclusive) from a file.

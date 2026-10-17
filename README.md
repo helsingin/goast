@@ -453,6 +453,16 @@ The MCP server registers these tools:
 - `search-symbols`: find declarations by query, kind, repository, package, or
   receiver.
 - `read-symbol`: read the source for a function, method, type, const, or var.
+  Replies default to at most 16 KiB of UTF-8 text, including pagination metadata.
+  Small symbols retain their full source response. Large symbols return
+  `next_offset` and `source_digest`: continue with `offset` and `expected_digest`,
+  keeping `package`, `name` and `include_imports` unchanged, until
+  `next_offset=none`. Offsets count bytes in the original rendered source
+  (including its file header, requested imports and doc comments), excluding
+  pagination headers. Pages preserve every byte and refuse a changed source
+  digest. `max_bytes` can explicitly select 1024–131072 bytes per response;
+  larger responses may exceed a client's inline-output limit. Reindex after
+  edits and restart pagination without the old digest.
 - `find-implementations`: map interfaces to implementations or concrete types
   to interfaces.
 - `find-references`: find indexed calls and package-qualified references, plus
